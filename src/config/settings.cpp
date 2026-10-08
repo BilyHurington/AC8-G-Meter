@@ -12,6 +12,7 @@ const char* metricKey(MetricId id) {
     case MetricId::CurrentG: return "current_g";
     case MetricId::MaxG: return "max_g";
     case MetricId::MinG: return "min_g";
+    case MetricId::SustainedMaxG: return "sustained_max_g";
     case MetricId::OnsetRate: return "onset_rate";
     case MetricId::Aoa: return "aoa";
     case MetricId::SustainedHighG: return "sustained_high_g";
@@ -27,6 +28,7 @@ const char* metricLabel(MetricId id) {
     case MetricId::CurrentG: return "Current G";
     case MetricId::MaxG: return "Max G (mission)";
     case MetricId::MinG: return "Min G (mission)";
+    case MetricId::SustainedMaxG: return "Sustained max G (mission)";
     case MetricId::OnsetRate: return "G onset rate (G/s)";
     case MetricId::Aoa: return "Angle of attack";
     case MetricId::SustainedHighG: return "Sustained high-G time";

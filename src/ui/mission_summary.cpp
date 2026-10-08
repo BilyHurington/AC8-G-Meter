@@ -30,43 +30,105 @@ void row(const char* label, const std::string& value, const std::string& detail 
 }
 
 std::string at(double s) { return "at " + formatClock(s); }
+std::string gValue(double g) { return formatNumber(g, 1, true) + " G"; }
 
-void statsTable(const MissionStats& st) {
+// "Sustained G (>= 0.20 s)": W of the report (0: the filter was off, sustained = peak).
+std::string sustainedLabel(const MissionReport& report, const char* what) {
+  char buf[64];
+  if (report.minExcursionS > 0.0)
+    std::snprintf(buf, sizeof buf, "Sustained %s (>=%.1f s)", what, report.minExcursionS);  // fonts lack U+2265
+  else
+    std::snprintf(buf, sizeof buf, "Sustained %s", what);
+  return buf;
+}
+
+void statsTable(const MissionReport& report) {
+  const MissionStats& st = report.stats;
   if (!ImGui::BeginTable("##ft_summary_stats", 2, ImGuiTableFlags_SizingFixedFit)) return;
-  ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9.0f);
+  ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed);  // fits the longest label
   row("Flight time", formatClock(st.durationS));
+  // Peak: every reading as the live G showed it. Sustained: excursions shorter than W removed.
   if (st.hasGData) {
-    row("Max G", formatNumber(st.maxG, 1, true) + " G", at(st.maxGAtS));
-    row("Min G", formatNumber(st.minG, 1, true) + " G", at(st.minGAtS));
+    row("Peak G", gValue(st.maxG), at(st.maxGAtS));
+  } else {
+    row("Peak G", "--");
+  }
+  if (st.hasSustainedData)
+    row(sustainedLabel(report, "G").c_str(), gValue(st.sustainedMaxG), at(st.sustainedMaxGAtS));
+  else
+    row(sustainedLabel(report, "G").c_str(), "--");
+  if (st.hasGData) {
+    row("Peak min G", gValue(st.minG), at(st.minGAtS));
+  } else {
+    row("Peak min G", "--");
+  }
+  if (st.hasSustainedData)
+    row(sustainedLabel(report, "min G").c_str(), gValue(st.sustainedMinG), at(st.sustainedMinGAtS));
+  else
+    row(sustainedLabel(report, "min G").c_str(), "--");
+  if (st.hasGData) {
     row("Max onset", formatNumber(st.maxOnset, 1, true) + " G/s");
     row("Max unload", formatNumber(st.minOnset, 1, true) + " G/s");
-  } else {
-    row("Max / min G", "--");
   }
   row("Max AoA", formatNumber(st.maxAoaDeg, 1, false) + kDegreeSign);
   row("Max speed", formatSpeedKmh(st.maxSpeed));
-  row("Longest high-G", formatNumber(st.longestHighGS, 1, false) + " s");
+  // Episodes are counted on the sustained G, so a short bump never makes one.
+  row("Longest sustained high-G", formatNumber(st.longestHighGS, 1, false) + " s");
   char buf[64];
   std::snprintf(buf, sizeof buf, "%d episode%s", st.highGEpisodes, st.highGEpisodes == 1 ? "" : "s");
-  row("Total high-G", formatNumber(st.totalHighGS, 1, false) + " s", buf);
+  row("Total sustained high-G", formatNumber(st.totalHighGS, 1, false) + " s", buf);
   ImGui::EndTable();
 }
 
-void histogram(const MissionStats& st) {
-  double total = 0.0;
-  for (double v : st.timeInGBinS) total += v;
-  const float labelW = ImGui::GetFontSize() * 5.0f;
-  for (int i = 0; i < kGBinCount; ++i) {
-    const double secs = st.timeInGBinS[static_cast<std::size_t>(i)];
-    const float frac = total > 0.0 ? static_cast<float>(secs / total) : 0.0f;
-    ImGui::TextUnformatted(gBinLabel(i).c_str());
-    ImGui::SameLine(labelW);
-    char overlay[48];
-    std::snprintf(overlay, sizeof overlay, "%.1f s  (%.0f%%)", secs, 100.0 * static_cast<double>(frac));
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, i >= 5 ? kWarn : kAccent);  // bins from 5 G up
-    ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight()), overlay);  // compact rows
-    ImGui::PopStyleColor();
+// Highest / lowest N-second average of the live G. Hovering a row (or one of its cells)
+// highlights that window on the chart: the max one in orange, the min one in blue.
+void averagesTable(const MissionReport& report, GChart& chart) {
+  const ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH;
+  if (!ImGui::BeginTable("##ft_summary_avg", 3, flags)) return;
+  const float fs = ImGui::GetFontSize();
+  ImGui::TableSetupColumn("Window", ImGuiTableColumnFlags_WidthFixed, fs * 4.5f);
+  ImGui::TableSetupColumn("Max avg", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("Min avg", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableHeadersRow();
+  for (std::size_t i = 0; i < report.windowed.size(); ++i) {
+    const WindowedG& w = report.windowed[i];
+    ImGui::PushID(static_cast<int>(i));
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    char label[32];
+    std::snprintf(label, sizeof label, "%g s", w.windowS);
+    // A selectable spanning the row makes the whole row hoverable.
+    ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+    const bool rowHovered = ImGui::IsItemHovered();
+    bool maxHovered = false, minHovered = false;
+    auto cell = [&](double g, double startS, bool& hovered) {
+      ImGui::TableNextColumn();
+      if (!w.valid) {
+        ImGui::TextDisabled("--");
+        return;
+      }
+      ImGui::TextUnformatted(gValue(g).c_str());
+      hovered = ImGui::IsItemHovered();
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", at(startS).c_str());
+      hovered = hovered || ImGui::IsItemHovered();
+    };
+    cell(w.maxAvgG, w.maxAvgStartS, maxHovered);
+    cell(w.minAvgG, w.minAvgStartS, minHovered);
+    if (w.valid && (rowHovered || maxHovered || minHovered)) {
+      // The row: the max window (the one the user most likely looks for); a cell: its own.
+      if (minHovered)
+        chart.setHighlight(w.minAvgStartS, w.minAvgStartS + w.windowS, false);
+      else
+        chart.setHighlight(w.maxAvgStartS, w.maxAvgStartS + w.windowS, true);
+    }
+    ImGui::PopID();
   }
+  ImGui::EndTable();
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("Average of the live G over the best / worst window of each length. Hover a row to see it "
+                     "on the chart.");
+  ImGui::PopStyleColor();
 }
 
 }  // namespace
@@ -106,13 +168,13 @@ SummaryResult drawMissionSummary(const MissionReport& report, const SummaryConte
     chart.draw(report, ImVec2(0.0f, std::max(fs * 11.0f, ImGui::GetWindowHeight() * 0.38f)));
     if (ImGui::BeginTable("##ft_summary_cols", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("stats", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-      ImGui::TableSetupColumn("bins", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+      ImGui::TableSetupColumn("averages", ImGuiTableColumnFlags_WidthStretch, 1.0f);
       ImGui::TableNextColumn();
       ImGui::SeparatorText("Statistics");
-      statsTable(st);
+      statsTable(report);
       ImGui::TableNextColumn();
-      ImGui::SeparatorText("Time at G");
-      histogram(st);
+      ImGui::SeparatorText("Average G over window");
+      averagesTable(report, chart);
       ImGui::EndTable();
     }
   }

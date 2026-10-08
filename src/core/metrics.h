@@ -43,20 +43,33 @@ inline constexpr int kGBinCount = static_cast<int>(kGBinEdges.size()) + 1;
 int gBinIndex(double g);
 
 // Aggregates over one mission. Times ("...AtS") are seconds since mission start.
+//
+// Two kinds of G statistics ("dual values"):
+//   peak      : from the live G, exactly as the HUD showed it (spike-gated, smoothed, never
+//               capped), updated at once: maxG / minG, onset extremes, time in G bins.
+//   sustained : from the live G with excursions shorter than PipelineConfig::minExcursionS
+//               (W) removed (SustainedFilter): the highest / lowest level held for at least
+//               ~W, and the high-G episodes, so that a short bump never makes an episode. This
+//               path lags the live G by up to ~2 W; hasSustainedData stays false until its
+//               first confirmed value (and in archives written before it existed).
 struct MissionStats {
   bool hasData = false;
-  bool hasGData = false;           // G extremes / onset / histogram hold at least one valid value
+  bool hasGData = false;           // peak G extremes / onset / histogram hold at least one valid value
   double durationS = 0.0;          // flight time while Active (pauses excluded)
-  double maxG = 0.0, maxGAtS = 0.0;
-  double minG = 0.0, minGAtS = 0.0;
-  double maxOnset = 0.0;           // most positive onset rate, G/s
-  double minOnset = 0.0;           // most negative onset rate, G/s
+  double maxG = 0.0, maxGAtS = 0.0;  // peak
+  double minG = 0.0, minGAtS = 0.0;  // peak
+  double maxOnset = 0.0;           // most positive onset rate, G/s (live)
+  double minOnset = 0.0;           // most negative onset rate, G/s (live)
+  bool hasSustainedData = false;   // sustained extremes hold at least one confirmed value
+  double sustainedMaxG = 0.0, sustainedMaxGAtS = 0.0;
+  double sustainedMinG = 0.0, sustainedMinGAtS = 0.0;
   double maxAoaDeg = 0.0;
   double maxSpeed = 0.0;           // m/s
+  // High-G episodes (enter / exit thresholds with hysteresis) of the sustained G.
   double longestHighGS = 0.0;      // longest single sustained high-G episode
   double totalHighGS = 0.0;        // cumulative time in high-G episodes
   int highGEpisodes = 0;
-  std::array<double, kGBinCount> timeInGBinS{};
+  std::array<double, kGBinCount> timeInGBinS{};  // live G
   std::uint64_t acceptedSamples = 0;
   std::uint64_t rejectedSamples = 0;  // dropped as spikes or for bad timestamps / values
   std::uint64_t extremeGSamples = 0;  // accepted, |load factor| > PipelineConfig::extremeGThreshold
@@ -64,13 +77,16 @@ struct MissionStats {
 
 // One bucket of a MissionTrace (1 / hz of mission time).
 struct TracePoint {
-  float gMean = 1.0f;          // time-weighted mean of `g`
-  float gMin = 1.0f, gMax = 1.0f;  // extremes: a one-frame peak survives the downsampling
+  float gMean = 1.0f;          // time-weighted mean of the live `g`
+  float gMin = 1.0f, gMax = 1.0f;  // live extremes: a one-frame peak survives the downsampling
+  // Time-weighted mean of the sustained G (MissionStats), NaN when the bucket has none (the
+  // end of a mission recorded before the filter caught up, or an archive from before it).
+  float gSustained = 1.0f;
   float onset = 0.0f;          // onset rate with the largest magnitude in the bucket, G/s
   float aoaDeg = 0.0f;         // largest valid AoA, NaN when no sample had a valid AoA
   float speed = 0.0f;          // m/s, last sample of the bucket
   float altitude = 0.0f;       // m, last sample of the bucket
-  bool highG = false;          // some sample was inside a sustained high-G episode
+  bool highG = false;          // some sample was inside a (sustained) high-G episode
 };
 
 // Fixed-rate record of a mission's valid metrics for the post-mission chart and the archive.
@@ -81,7 +97,7 @@ struct MissionTrace {
   // Mission time of bucket 0. 0 unless the G mode changed mid-mission, which restarts the
   // trace (and the other G statistics) at that point.
   double startS = 0.0;
-  std::vector<float> gMean, gMin, gMax, onset, aoaDeg, speed, altitude;
+  std::vector<float> gMean, gMin, gMax, gSustained, onset, aoaDeg, speed, altitude;
   std::vector<std::uint8_t> highG;  // 0 / 1
 
   std::size_t size() const { return gMean.size(); }
@@ -91,6 +107,15 @@ struct MissionTrace {
   void push(const TracePoint& p);
   TracePoint at(std::size_t i) const;
   void clear();
+};
+
+// Highest and lowest average of the live G over any window of a given length (results-screen
+// reference: "max 5 s average G"). See computeWindowedAverages (core/windowed_g.h).
+struct WindowedG {
+  double windowS = 0.0;
+  bool valid = false;              // false when the trace is shorter than the window
+  double maxAvgG = 0.0, maxAvgStartS = 0.0;  // mission time the window starts at
+  double minAvgG = 0.0, minAvgStartS = 0.0;
 };
 
 // Immutable record of a finished mission, published once per mission.
@@ -104,6 +129,8 @@ struct MissionReport {
   double highGEnter = 6.0;
   double highGExit = 5.5;
   double extremeGThreshold = 15.0;  // the threshold stats.extremeGSamples was counted with
+  double minExcursionS = 0.2;       // W of the sustained statistics (0 = filter off)
+  std::vector<WindowedG> windowed;  // kDefaultAverageWindowsS, from the trace
   std::string label;                // host-provided name (map, scenario, replay file); may be empty
 };
 

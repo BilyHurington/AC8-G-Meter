@@ -97,7 +97,7 @@ void decimateTrace(const MissionTrace& trace, double t0, double t1, int columns,
   };
   auto pointAt = [&](std::size_t i, double t) {
     const float s = secondaryAt(i);
-    return ChartPoint{t, trace.gMin[i], trace.gMax[i], trace.gMean[i], s, s, trace.highG[i] != 0};
+    return ChartPoint{t, trace.gMin[i], trace.gMax[i], trace.gMean[i], trace.gSustained[i], s, s, trace.highG[i] != 0};
   };
 
   const std::size_t count = i1 - i0 + 1;
@@ -110,10 +110,17 @@ void decimateTrace(const MissionTrace& trace, double t0, double t1, int columns,
   out.reserve(static_cast<std::size_t>(columns) + 2);
   const double columnS = (t1 - t0) / columns;
   long long column = std::numeric_limits<long long>::min();
-  double meanSum = 0.0;
-  int meanCount = 0;
+  double meanSum = 0.0, susSum = 0.0;
+  int meanCount = 0, susCount = 0;
   auto finish = [&] {
     if (meanCount > 0) out.back().gMean = static_cast<float>(meanSum / meanCount);
+    if (susCount > 0) out.back().gSustained = static_cast<float>(susSum / susCount);
+  };
+  auto addSustained = [&](std::size_t i) {
+    if (std::isfinite(trace.gSustained[i])) {
+      susSum += trace.gSustained[i];
+      ++susCount;
+    }
   };
   for (std::size_t i = i0; i <= i1; ++i) {
     const auto c = static_cast<long long>(std::floor((centre(i) - t0) / columnS));
@@ -123,6 +130,9 @@ void decimateTrace(const MissionTrace& trace, double t0, double t1, int columns,
       out.push_back(pointAt(i, t0 + (static_cast<double>(c) + 0.5) * columnS));
       meanSum = trace.gMean[i];
       meanCount = 1;
+      susSum = 0.0;
+      susCount = 0;
+      addSustained(i);
       continue;
     }
     ChartPoint& p = out.back();
@@ -134,8 +144,13 @@ void decimateTrace(const MissionTrace& trace, double t0, double t1, int columns,
     p.highG = p.highG || trace.highG[i] != 0;
     meanSum += trace.gMean[i];
     ++meanCount;
+    addSustained(i);
   }
   finish();
+}
+
+bool traceHasSustained(const MissionTrace& trace) {
+  return std::any_of(trace.gSustained.begin(), trace.gSustained.end(), [](float v) { return std::isfinite(v); });
 }
 
 bool pointsRange(const std::vector<ChartPoint>& points, bool secondary, float& lo, float& hi) {

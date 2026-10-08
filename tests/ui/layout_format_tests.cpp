@@ -80,6 +80,10 @@ TEST_CASE("metric lines are aligned HUD rows") {
   CHECK(formatMetricLine(MetricId::CurrentG, s) == "G      +6.3");
   CHECK(formatMetricLine(MetricId::MaxG, s) == "MAX G  +7.9");
   CHECK(formatMetricLine(MetricId::MinG, s) == "MIN G  -1.2");
+  CHECK(formatMetricLine(MetricId::SustainedMaxG, s) == "SUS G    --");  // no sustained value yet
+  s.mission.hasSustainedData = true;
+  s.mission.sustainedMaxG = 6.84;
+  CHECK(formatMetricLine(MetricId::SustainedMaxG, s) == "SUS G  +6.8");
   CHECK(formatMetricLine(MetricId::OnsetRate, s) == "ONSET  +4.1 G/s");
   CHECK(formatMetricLine(MetricId::Aoa, s) == "AOA    12.4\xC2\xB0");
   CHECK(formatMetricLine(MetricId::SustainedHighG, s) == "HI-G   3.2 s");

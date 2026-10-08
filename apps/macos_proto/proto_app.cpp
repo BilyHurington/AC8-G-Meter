@@ -16,10 +16,14 @@ ProtoApp::ProtoApp(ProtoConfig config)
     : config_(std::move(config)),
       store_(config_.settingsPath),
       archive_(config_.missionsDir),
+      missionRecorder_(archive_),
       ui_(store_) {
   store_.load();
+  // From here on the UI keeps both in step with the settings (atomics, render thread).
   archive_.setMaxSaved(store_.settings().history.maxSavedMissions);
-  ui_.setMissionArchive(&archive_);
+  missionRecorder_.setEnabled(store_.settings().history.saveMissions);
+  ui_.setMissionArchive(&archive_, &missionRecorder_);
+  pipeline_.addConsumer(&missionRecorder_);
   if (!store_.lastError().empty())
     std::fprintf(stderr, "settings: %s (using defaults)\n", store_.lastError().c_str());
   pipeline_.setConfig(store_.settings().toPipelineConfig(baseConfig_));
@@ -30,6 +34,7 @@ ProtoApp::ProtoApp(ProtoConfig config)
   };
 
   if (config_.scenario) simOptions_.scenario = *config_.scenario;
+  if (config_.velocityNoiseMS > 0.0) simOptions_.dirty.velocityNoiseMS = config_.velocityNoiseMS;
   sim_.setOptions(simOptions_);
   sim_.restart();
   ui_.setMenuOpen(config_.openMenu);

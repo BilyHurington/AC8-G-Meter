@@ -5,7 +5,54 @@
 #include <limits>
 #include <utility>
 
+#include "core/windowed_g.h"
+
 namespace ft {
+
+namespace {
+
+// Round-off of summed frame times: a sample ending a hair past a bucket boundary does not leak
+// its value into the next bucket.
+constexpr double kEpsS = 1e-9;
+constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+
+}  // namespace
+
+// ---- Bucketer ---------------------------------------------------------------------------
+
+void MissionTracker::Bucketer::restart(double startS) {
+  index_ = 0;
+  tracedToS_ = startS;
+  any_ = false;
+}
+
+template <typename Merge, typename Close>
+void MissionTracker::Bucketer::add(double now, const MissionTrace& grid, Merge&& merge, Close&& close) {
+  if (!(grid.hz > 0.0)) return;
+  double from = tracedToS_;
+  tracedToS_ = std::max(tracedToS_, now);
+  if (now <= from + kEpsS) {
+    if (index_ < kMaxTracePoints) {
+      merge(0.0, !any_);
+      any_ = true;
+    }
+    return;
+  }
+  while (index_ < kMaxTracePoints) {
+    const double bucketEnd = grid.timeAt(index_ + 1);
+    const double to = std::min(now, bucketEnd);
+    if (to > from + kEpsS || !any_) {
+      merge(std::max(to - from, 0.0), !any_);
+      any_ = true;
+    }
+    if (now < bucketEnd - kEpsS) break;
+    closeOpen(close);
+    from = bucketEnd;
+    if (now <= from + kEpsS) break;
+  }
+}
+
+// ---- MissionTracker ---------------------------------------------------------------------
 
 void MissionTracker::start(double traceHz) {
   trace_.hz = traceHz;
@@ -17,7 +64,11 @@ void MissionTracker::restartTrace(double startS) {
   trace_.clear();
   trace_.startS = startS;
   bucket_ = {};
-  tracedToS_ = startS;
+  sBucket_ = {};
+  sustainedG_.clear();
+  sustainedHighG_.clear();
+  live_.restart(startS);
+  sustained_.restart(startS);
 }
 
 void MissionTracker::clearStats() {
@@ -43,10 +94,9 @@ void MissionTracker::addTime(double dtS) {
   stats_.hasData = true;
 }
 
-void MissionTracker::add(const FlightMetrics& m, double dtS, bool highGEntered, double atS) {
+void MissionTracker::add(const FlightMetrics& m, double dtS) {
   MissionStats& s = stats_;
-  const double now = std::min(atS, s.durationS);
-
+  const double now = s.durationS;
   if (!s.hasGData) {
     s.hasGData = true;
     s.maxG = s.minG = m.g;
@@ -67,47 +117,44 @@ void MissionTracker::add(const FlightMetrics& m, double dtS, bool highGEntered, 
   s.maxSpeed = std::max(s.maxSpeed, m.speed);
   s.timeInGBinS[gBinIndex(m.g)] += dtS;
 
-  if (highGEntered) ++s.highGEpisodes;
+  live_.add(now, trace_, [&](double weightS, bool first) { mergeIntoBucket(m, weightS, first); },
+            [&] { closeBucket(); });
+}
+
+void MissionTracker::addSustained(const SustainedSample& x) {
+  MissionStats& s = stats_;
+  const double now = std::min(x.atS, s.durationS);
+  if (x.confirmed) {
+    if (!s.hasSustainedData) {
+      s.hasSustainedData = true;
+      s.sustainedMaxG = s.sustainedMinG = x.g;
+      s.sustainedMaxGAtS = s.sustainedMinGAtS = now;
+    }
+    if (x.g > s.sustainedMaxG) {
+      s.sustainedMaxG = x.g;
+      s.sustainedMaxGAtS = now;
+    }
+    if (x.g < s.sustainedMinG) {
+      s.sustainedMinG = x.g;
+      s.sustainedMinGAtS = now;
+    }
+  }
+  if (x.highGEntered) ++s.highGEpisodes;
   // The episode clock starts at 0 on the entering sample, so that dt is not counted.
-  if (m.inHighG && !highGEntered) s.totalHighGS += dtS;
-  s.longestHighGS = std::max(s.longestHighGS, m.highGDurationS);
+  if (x.inHighG && !x.highGEntered) s.totalHighGS += x.dtS;
+  s.longestHighGS = std::max(s.longestHighGS, x.highGDurationS);
 
-  traceSample(m, now);
+  if (x.confirmed)
+    sustained_.add(now, trace_, [&](double weightS, bool) { mergeSustained(x, weightS); }, [&] { closeSustained(); });
 }
 
-// The sample covers (tracedToS_, now]: split it over the buckets that span overlaps, each
-// weighted by its share of the time. A sample with no duration (first one, or right after a
-// gap that added no time) still counts for the extremes of the current bucket. kEpsS absorbs
-// the round-off of summed frame times, so a sample ending a hair past a bucket boundary does
-// not leak its value into the next bucket.
-void MissionTracker::traceSample(const FlightMetrics& m, double now) {
-  constexpr double kEpsS = 1e-9;
-  if (!(trace_.hz > 0.0)) return;
-  double from = tracedToS_;
-  tracedToS_ = std::max(tracedToS_, now);
-  if (now <= from + kEpsS) {
-    if (trace_.size() < kMaxTracePoints) mergeIntoBucket(m, 0.0);
-    return;
-  }
-  while (trace_.size() < kMaxTracePoints) {
-    const double bucketEnd = trace_.timeAt(trace_.size() + 1);
-    const double to = std::min(now, bucketEnd);
-    if (to > from + kEpsS || !bucket_.any) mergeIntoBucket(m, std::max(to - from, 0.0));
-    if (now < bucketEnd - kEpsS) break;
-    closeBucket();
-    from = bucketEnd;
-    if (now <= from + kEpsS) break;
-  }
-}
-
-void MissionTracker::mergeIntoBucket(const FlightMetrics& m, double weightS) {
+void MissionTracker::mergeIntoBucket(const FlightMetrics& m, double weightS, bool first) {
   Bucket& b = bucket_;
   const float g = static_cast<float>(m.g);
-  if (!b.any) {
-    b.any = true;
+  if (first) {
     b.p.gMin = b.p.gMax = g;
     b.p.onset = static_cast<float>(m.onsetRate);
-    b.p.aoaDeg = std::numeric_limits<float>::quiet_NaN();
+    b.p.aoaDeg = kNaN;
   }
   b.weightS += weightS;
   b.gSum += m.g * weightS;
@@ -121,28 +168,51 @@ void MissionTracker::mergeIntoBucket(const FlightMetrics& m, double weightS) {
   }
   b.p.speed = static_cast<float>(m.speed);
   b.p.altitude = static_cast<float>(m.altitude);
-  b.p.highG = b.p.highG || m.inHighG;
 }
 
 void MissionTracker::closeBucket() {
-  if (!bucket_.any) return;
   TracePoint p = bucket_.p;
   if (bucket_.weightS > 0.0) {
     // Rounding can put the mean a hair outside [min, max]; keep the band consistent.
     p.gMean = std::clamp(static_cast<float>(bucket_.gSum / bucket_.weightS), p.gMin, p.gMax);
   }
+  p.gSustained = kNaN;  // both filled from the sustained columns at finish()
+  p.highG = false;
   trace_.push(p);
   bucket_ = {};
 }
 
+void MissionTracker::mergeSustained(const SustainedSample& s, double weightS) {
+  SustainedBucket& b = sBucket_;
+  b.weightS += weightS;
+  b.gSum += s.g * weightS;
+  b.lastG = s.g;
+  b.highG = b.highG || s.inHighG;
+}
+
+void MissionTracker::closeSustained() {
+  const SustainedBucket& b = sBucket_;
+  sustainedG_.push_back(static_cast<float>(b.weightS > 0.0 ? b.gSum / b.weightS : b.lastG));
+  sustainedHighG_.push_back(b.highG ? 1 : 0);
+  sBucket_ = {};
+}
+
 MissionReport MissionTracker::finish(bool aborted) {
   open_ = false;
-  if (trace_.size() < kMaxTracePoints) closeBucket();  // the last, partial bucket
+  live_.finish([&] { closeBucket(); });  // the last, partial buckets
+  sustained_.finish([&] { closeSustained(); });
+  // Buckets the sustained path did not reach (its lag at the end of the mission, when it was
+  // not flushed) stay NaN / not high-G.
+  for (std::size_t i = 0; i < trace_.size() && i < sustainedG_.size(); ++i) {
+    trace_.gSustained[i] = sustainedG_[i];
+    trace_.highG[i] = sustainedHighG_[i];
+  }
   MissionReport r;
   r.id = nextId_++;
   r.aborted = aborted;
   r.stats = stats_;
   r.trace = std::move(trace_);
+  r.windowed = computeWindowedAverages(r.trace);
   trace_ = {};
   trace_.hz = r.trace.hz;
   restartTrace(0.0);

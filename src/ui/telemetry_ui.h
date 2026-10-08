@@ -16,6 +16,7 @@ namespace ft {
 
 class IOverlayLayer;
 class MissionArchive;
+class MissionArchiveRecorder;
 
 class TelemetryUi {
  public:
@@ -48,10 +49,16 @@ class TelemetryUi {
   bool historyOpen() const { return historyOpen_; }
   void showHistory(bool show) { historyOpen_ = show; refreshWantsInput(); }
 
-  // Optional, not owned (must outlive this object or be reset to null first). With an archive,
-  // every finished mission with G data is saved when settings.history.saveMissions is on, and
-  // the mission history window is available. Call on the render thread, between frames.
-  void setMissionArchive(MissionArchive* archive) { archive_ = archive; }
+  // Optional, not owned (must outlive this object or be reset to null first). With an archive
+  // the mission history window is available and the summary shows the save status. Saving
+  // itself is done by `recorder`, which the host registers with the pipeline (it must not
+  // depend on the UI drawing frames); every frame the UI copies settings.history into it
+  // (saveMissions -> recorder->setEnabled) and into the archive (maxSavedMissions ->
+  // setMaxSaved), both atomics. Call on the render thread, between frames.
+  void setMissionArchive(MissionArchive* archive, MissionArchiveRecorder* recorder = nullptr) {
+    archive_ = archive;
+    recorder_ = recorder;
+  }
 
   // Invoked after any setting that affects the pipeline changes (apply via toPipelineConfig).
   std::function<void(const Settings&)> onSettingsChanged;
@@ -68,6 +75,7 @@ class TelemetryUi {
   bool summaryOpen_ = false;
   bool historyOpen_ = false;
   MissionArchive* archive_ = nullptr;
+  MissionArchiveRecorder* recorder_ = nullptr;
   bool imguiWantsMouse_ = false;  // io.WantCaptureMouse at the end of the last frame()
   std::atomic<bool> wantsInput_{false};
 

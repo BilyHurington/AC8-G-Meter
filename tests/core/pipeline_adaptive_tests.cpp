@@ -182,7 +182,9 @@ TEST_CASE("frame-time jitter does not make the output flicker invalid") {
     highGS[adaptive] = p.snapshot().mission.totalHighGS;
   }
   CHECK(highGS[1] == Approx(highGS[0]).epsilon(0.01));
-  CHECK(highGS[1] > 19.4);  // live mission stats lag by up to 2 x minExcursionS (0.4 s)
+  // Sustained statistics lag by up to W / 8 + 2 W (0.425 s), and the first 1.125 W of a
+  // stream (here the mission's start) cannot start an episode.
+  CHECK(highGS[1] > 19.1);
 }
 
 TEST_CASE("adaptive: position-only input keeps the fixed position window") {

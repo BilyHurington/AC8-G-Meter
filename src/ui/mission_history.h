@@ -19,11 +19,20 @@ class MissionHistoryWindow {
     MissionIndexEntry entry;                      // ... and where it came from
   };
 
-  // Draws the window while `open` is true. Re-lists the archive whenever the window opens.
+  // Draws the window while `open` is true. Re-lists the archive whenever the window opens
+  // ("Reading folder..." until that listing is done). Closing the window abandons a load in
+  // progress: its result is dropped, never shown later.
   Result draw(MissionArchive& archive, bool& open);
+  // Starts loading `entry` (what clicking its row does). A load already in progress is
+  // abandoned: the most recent click wins.
+  void requestLoad(MissionArchive& archive, const MissionIndexEntry& entry);
   bool loading() const { return pending_.valid(); }
+  // The listing shown is being re-read (as of the last draw).
+  bool readingFolder() const { return index_.refreshing; }
 
  private:
+  void cancelLoad();
+
   bool wasOpen_ = false;
   std::uint64_t seenVersion_ = 0;
   MissionIndex index_;

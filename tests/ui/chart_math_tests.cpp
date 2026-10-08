@@ -14,7 +14,7 @@ namespace {
 MissionTrace flatTrace(std::size_t n, double hz = 20.0) {
   MissionTrace t;
   t.hz = hz;
-  for (std::size_t i = 0; i < n; ++i) t.push({1.0f, 0.9f, 1.1f, 0.0f, 5.0f, 200.0f, 1000.0f, false});
+  for (std::size_t i = 0; i < n; ++i) t.push({1.0f, 0.9f, 1.1f, 1.0f, 0.0f, 5.0f, 200.0f, 1000.0f, false});
   return t;
 }
 
@@ -99,6 +99,29 @@ TEST_CASE("decimation keeps one-bucket extremes and is bounded by the width") {
 
   decimateTrace(MissionTrace{}, 0.0, 1.0, 100, ChartSeries::None, pts);
   CHECK(pts.empty());
+}
+
+TEST_CASE("decimation: the sustained column is a NaN-aware mean") {
+  MissionTrace t = flatTrace(2000);
+  for (std::size_t i = 0; i < t.size(); ++i) t.gSustained[i] = i < 1000 ? 2.0f : std::nanf("");
+  t.gSustained[500] = 6.0f;
+  CHECK(traceHasSustained(t));
+  std::vector<ChartPoint> pts;
+  decimateTrace(t, t.startS, t.endS(), 100, ChartSeries::None, pts);  // 20 buckets per column
+  REQUIRE(pts.size() >= 99);
+  int finite = 0;
+  for (const ChartPoint& p : pts) {
+    if (p.t < 49.0) CHECK(std::isfinite(p.gSustained));
+    if (p.t > 51.0) CHECK(std::isnan(p.gSustained));  // no value: a gap in the line, not 0
+    if (std::isfinite(p.gSustained)) ++finite;
+  }
+  CHECK(finite == Approx(50).epsilon(0.05));
+  float hi = 0.0f;
+  for (const ChartPoint& p : pts) if (std::isfinite(p.gSustained)) hi = std::max(hi, p.gSustained);
+  CHECK(hi == Approx(2.2f));  // (19 * 2 + 6) / 20
+
+  for (float& v : t.gSustained) v = std::nanf("");  // an archive from before the column
+  CHECK_FALSE(traceHasSustained(t));
 }
 
 TEST_CASE("bucketAt clamps to the trace") {

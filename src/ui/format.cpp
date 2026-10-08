@@ -45,6 +45,8 @@ std::string formatMetricLine(MetricId id, const MetricsSnapshot& s) {
       return line("MAX G", ms.hasGData ? formatNumber(ms.maxG, 1, true, 5) : padLeft(na, 5));
     case MetricId::MinG:
       return line("MIN G", ms.hasGData ? formatNumber(ms.minG, 1, true, 5) : padLeft(na, 5));
+    case MetricId::SustainedMaxG:  // lags the live G by up to ~2 W (MissionFeed)
+      return line("SUS G", ms.hasSustainedData ? formatNumber(ms.sustainedMaxG, 1, true, 5) : padLeft(na, 5));
     case MetricId::OnsetRate:
       return line("ONSET", m.valid ? formatNumber(m.onsetRate, 1, true, 5) + " G/s" : padLeft(na, 5));
     case MetricId::Aoa:

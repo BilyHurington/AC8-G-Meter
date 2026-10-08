@@ -34,11 +34,20 @@ void helpMarker(const char* text) {
 
 }  // namespace
 
+int missionsDeletedByNewLimit(int currentLimit, int newLimit, int savedMissions) {
+  if (newLimit <= 0 || savedMissions <= newLimit) return 0;  // unlimited, or all fit
+  // Missions the current limit already lets go are not news (a lower or equal current limit).
+  const int alreadyDeleted = currentLimit > 0 && currentLimit < savedMissions ? savedMissions - currentLimit : 0;
+  const int deleted = savedMissions - newLimit;
+  return deleted > alreadyDeleted ? deleted : 0;
+}
+
 SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& editMode, bool hasLastReport,
-                                      bool hasArchive, const FilterState& filter, double now) {
+                                      const MissionArchiveInfo& archive, const FilterState& filter, double now) {
   SettingsMenuResult r;
   if (!open) {
     capture_ = Capture::None;
+    pendingKeep_ = -1;  // closing the menu cancels an unconfirmed "Keep missions" change
     return r;
   }
 
@@ -60,7 +69,7 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   metricsSection(s, filter, r);
   hotkeySection(s, r);
 
-  missionSection(s, hasLastReport, hasArchive, r);
+  missionSection(s, hasLastReport, archive, r);
   ImGui::PopItemWidth();
 
   ImGui::Spacing();
@@ -73,6 +82,13 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   if (ImGui::BeginPopupModal("Restore defaults?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Reset every overlay, metric, hotkey, summary and history\nsetting to its default value?"
                            "\nSaved missions are kept.");
+    const int defaultKeep = Settings{}.history.maxSavedMissions;
+    const int deletes = archive.available && !archive.counting
+                            ? missionsDeletedByNewLimit(s.history.maxSavedMissions, defaultKeep, archive.savedMissions)
+                            : 0;
+    if (deletes > 0)
+      ImGui::TextColored(kWarn, "Except: \"Keep missions\" goes back to %d, which deletes\n%d older mission%s on the next save.",
+                         defaultKeep, deletes, deletes == 1 ? "" : "s");
     ImGui::Spacing();
     if (ImGui::Button("Restore defaults")) {
       store.restoreDefaults(now);
@@ -181,44 +197,93 @@ void SettingsMenu::metricsSection(Settings& s, const FilterState& filter, Settin
                              ImGuiSliderFlags_AlwaysClamp);
   helpMarker("A sustained high-G episode starts at the enter threshold and ends below the exit "
              "threshold (hysteresis avoids flicker around a single value).");
-  pipe |= ImGui::SliderFloat("Ignore G spikes shorter than", &m.minExcursionS, 0.0f, 0.5f,
+  pipe |= ImGui::SliderFloat("Sustained G: ignore bumps shorter than", &m.minExcursionS, 0.0f, 0.5f,
                              m.minExcursionS <= 0.0f ? "off" : "%.2f s", ImGuiSliderFlags_AlwaysClamp);
-  helpMarker("Bumps and dips of G shorter than this (collisions, physics jolts) are left out of the "
-             "mission MAX / MIN G, the statistics, the high-G episodes and the saved G curve. The "
-             "live G reading is not affected. MAX / MIN G on the overlay then update up to twice "
-             "this time late. 0 = off.");
+  helpMarker("The mission keeps two kinds of G values. Peak G (MAX / MIN G on the overlay) is "
+             "every reading as the live G showed it, real high-G spikes included. Sustained G is "
+             "the highest / lowest level held for at least about this long: bumps and dips shorter "
+             "than it (collisions, physics jolts) are left out, so it can be lower than the peak "
+             "even in a real manoeuvre (a pull that only touches 9 G reads less). High-G episodes "
+             "use the sustained G. It is ready up to about twice this time after the live G. "
+             "0 = sustained equals peak.");
   if (pipe) {
     s.clamp();  // keeps exit < enter when enter is lowered
     r.changed = r.pipelineChanged = true;
   }
 }
 
-void SettingsMenu::missionSection(Settings& s, bool hasLastReport, bool hasArchive, SettingsMenuResult& r) {
+void SettingsMenu::missionSection(Settings& s, bool hasLastReport, const MissionArchiveInfo& archive,
+                                  SettingsMenuResult& r) {
   sectionHeader("Mission summary & history");
   r.changed |= ImGui::Checkbox("Show summary when a mission ends", &s.summary.autoShow);
   ImGui::BeginDisabled(!hasLastReport);
   if (ImGui::Button("Show last mission")) r.showLastSummary = true;
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::BeginDisabled(!hasArchive);
+  ImGui::BeginDisabled(!archive.available);
   if (ImGui::Button("Mission history...")) r.showHistory = true;
   ImGui::EndDisabled();
   if (!hasLastReport) ImGui::TextDisabled("No mission finished yet.");
-  if (!hasArchive) {
+  if (!archive.available) {
     ImGui::TextDisabled("Mission history is not available in this host.");
+    pendingKeep_ = -1;
     return;
   }
   r.changed |= ImGui::Checkbox("Save finished missions", &s.history.saveMissions);
   helpMarker("Every mission with G data is saved to the mission history folder (a small JSON "
              "summary plus a CSV of the G curve), so its summary and chart can be reopened later.");
   ImGui::BeginDisabled(!s.history.saveMissions);
-  if (ImGui::SliderInt("Keep missions", &s.history.maxSavedMissions, 0, 1000,
-                       s.history.maxSavedMissions == 0 ? "all" : "last %d", ImGuiSliderFlags_AlwaysClamp)) {
-    s.clamp();
-    r.changed = true;
-  }
-  helpMarker("The oldest saved missions are deleted beyond this number (0 = keep all).");
+  keepMissionsInput(s, archive, r);
   ImGui::EndDisabled();
+}
+
+void SettingsMenu::keepMissionsInput(Settings& s, const MissionArchiveInfo& archive, SettingsMenuResult& r) {
+  int& limit = s.history.maxSavedMissions;
+  // Applied when typing ends (Enter / focus lost) or on a -/+ click (Ctrl: steps of 10).
+  int value = pendingKeep_ >= 0 ? pendingKeep_ : limit;
+  if (ImGui::InputInt("Keep missions", &value, 1, 10) && pendingKeep_ < 0) {
+    value = value < 0 ? 0 : (value > 1000 ? 1000 : value);
+    const int deletes = archive.counting ? 0 : missionsDeletedByNewLimit(limit, value, archive.savedMissions);
+    if (deletes > 0) {
+      pendingKeep_ = value;
+      pendingDeletes_ = deletes;
+      ImGui::OpenPopup("Delete older missions?");
+    } else if (value != limit) {
+      limit = value;
+      r.changed = true;
+    }
+  }
+  helpMarker("How many saved missions to keep. When a mission is saved, the oldest ones beyond "
+             "this number are deleted from disk. 0 = unlimited (keep every mission).");
+  if (limit == 0) ImGui::TextDisabled("0 = unlimited: every saved mission is kept.");
+  else ImGui::TextDisabled("Keeps the newest %d. 0 = unlimited.", limit);
+  if (!archive.counting) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d saved now)", archive.savedMissions);
+  }
+
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  if (ImGui::BeginPopupModal("Delete older missions?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("Keep only the newest %d missions?", pendingKeep_);
+    ImGui::TextColored(kWarn, "This will delete %d older mission%s on the next save.", pendingDeletes_,
+                       pendingDeletes_ == 1 ? "" : "s");
+    ImGui::TextDisabled("Deleted missions cannot be recovered.");
+    ImGui::Spacing();
+    if (ImGui::Button("Apply") && pendingKeep_ >= 0) {
+      limit = pendingKeep_;
+      r.changed = true;
+      pendingKeep_ = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      pendingKeep_ = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  } else if (!ImGui::IsPopupOpen("Delete older missions?")) {
+    pendingKeep_ = -1;  // the popup went away without an answer
+  }
 }
 
 void SettingsMenu::hotkeyRow(const char* label, Hotkey& hotkey, Capture which, SettingsMenuResult& r) {

@@ -3,7 +3,7 @@
 // Present hook. Based on imgui/examples/example_sdl3_metal.
 //
 // Usage: ft_macos_proto [--settings <file.json>] [--scenario <name>] [--size WxH]
-//                       [--menu] [--edit] [--history] [--no-debug] [--end-mission-at <s>]
+//                       [--menu] [--edit] [--history] [--no-debug] [--end-mission-at <s>] [--velocity-noise <m/s>]
 //                       [--missions <dir>]
 //                       [--screenshot <file.png> [--frames N]]
 #include <cctype>
@@ -58,6 +58,7 @@ bool parseArgs(int argc, char** argv, Args& a) {
     else if (arg == "--edit") a.proto.editMode = true;
     else if (arg == "--no-debug") a.proto.debugPanel = false;
     else if (arg == "--end-mission-at" && hasValue) a.proto.endMissionAtS = std::atof(argv[++i]);
+    else if (arg == "--velocity-noise" && hasValue) a.proto.velocityNoiseMS = std::atof(argv[++i]);
     else if (arg == "--size" && hasValue) {
       if (std::sscanf(argv[++i], "%dx%d", &a.width, &a.height) != 2) return false;
     } else if (arg == "--scenario" && hasValue) {
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
   if (!parseArgs(argc, argv, args)) {
     std::fprintf(stderr,
                  "usage: %s [--settings file.json] [--missions dir] [--scenario name] [--size WxH]\n"
-                 "          [--menu] [--edit] [--history] [--no-debug] [--end-mission-at seconds]\n"
+                 "          [--menu] [--edit] [--history] [--no-debug] [--end-mission-at seconds] [--velocity-noise m/s]\n"
                  "          [--screenshot out.png [--frames N]]\n",
                  argv[0]);
     return 2;

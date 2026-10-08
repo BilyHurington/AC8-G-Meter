@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include "storage/mission_archive.h"
+#include "storage/mission_recorder.h"
 #include "ui/format.h"
 #include "ui/g_chart.h"
 #include "ui/hotkey_input.h"
@@ -24,7 +25,10 @@ struct TelemetryUi::Impl {
   ImFont* hudFont = nullptr;
   std::shared_ptr<const MissionReport> summaryReport;  // report shown in the summary window
   std::optional<MissionIndexEntry> summaryEntry;       // set when it was opened from the history
-  std::uint32_t lastSeenReportId = 0;
+  // The last report the summary reacted to, by identity: ids restart at 1 when the host
+  // recreates the pipeline, so an id comparison would miss the next mission.
+  std::shared_ptr<const MissionReport> lastSeenReport;
+  bool menuWasOpen = false;
   GChart chart;
   MissionHistoryWindow history;
 };
@@ -45,8 +49,11 @@ SummaryContext summaryContext(const MissionReport& report, const std::optional<M
   }
   c.subtitle = report.label;
   if (!archive) return c;
+  // The recorder saves the pipeline's own report object, so the status belongs to the shown
+  // report exactly when it is the same object. lastSave() only knows the most recent save: an
+  // older status never matches.
   const SaveStatus st = archive->lastSave();
-  if (st.report == shown) {
+  if (st.report && st.report == shown) {
     switch (st.state) {
       case SaveStatus::State::Pending:
         c.status = "Saving...";
@@ -62,10 +69,12 @@ SummaryContext summaryContext(const MissionReport& report, const std::optional<M
       case SaveStatus::State::None:
         break;
     }
-  } else if (!settings.history.saveMissions) {
-    c.status = "Not saved (saving missions is off in the settings menu).";
   } else if (!report.stats.hasGData) {
     c.status = "Not saved (no G data).";
+  } else if (!settings.history.saveMissions) {
+    c.status = "Not saved (saving missions is off in the settings menu).";
+  } else {
+    c.status = "Not saved (saving missions was off when it ended).";
   }
   return c;
 }
@@ -107,15 +116,16 @@ void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float sc
     else if (isHotkeyPressed(settings.hotkeys.toggleEditMode)) editMode_ = !editMode_;
   }
 
-  // A new mission report arrived: archive it, and pop the summary if enabled. Aborted missions
-  // (left before the results screen) are saved but not shown automatically; "Show last
-  // mission" still opens them.
-  if (snapshot.lastReport && snapshot.lastReport->id != d.lastSeenReportId) {
-    d.lastSeenReportId = snapshot.lastReport->id;
-    if (archive_ && settings.history.saveMissions && snapshot.lastReport->stats.hasGData) {
-      archive_->setMaxSaved(settings.history.maxSavedMissions);
-      archive_->saveAsync(snapshot.lastReport);
-    }
+  // The game thread saves missions (MissionArchiveRecorder); keep it in step with the settings.
+  if (recorder_) recorder_->setEnabled(settings.history.saveMissions);
+  if (archive_) archive_->setMaxSaved(settings.history.maxSavedMissions);
+
+  // A new mission report arrived: pop the summary if enabled. Only the newest report is shown
+  // (several may end between two frames; each was saved by the recorder). Aborted missions
+  // (left before the results screen) are not shown automatically; "Show last mission" still
+  // opens them.
+  if (snapshot.lastReport && snapshot.lastReport != d.lastSeenReport) {
+    d.lastSeenReport = snapshot.lastReport;
     if (!snapshot.lastReport->aborted) {
       d.summaryReport = snapshot.lastReport;
       d.summaryEntry.reset();
@@ -132,9 +142,19 @@ void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float sc
   for (auto& layer : d.layers) changed |= layer->draw(overlayFrame);
 
   bool pipelineChanged = false;
+  // The menu's "Keep missions" asks before a lower limit deletes saved missions, so it needs
+  // their number: re-list the folder whenever the menu opens.
+  if (menuOpen_ && !d.menuWasOpen && archive_) archive_->refreshAsync();
+  d.menuWasOpen = menuOpen_;
   if (menuOpen_) {
+    MissionArchiveInfo archiveInfo;
+    if (archive_) {
+      archiveInfo.available = true;
+      archiveInfo.savedMissions = static_cast<int>(archive_->indexSize());
+      archiveInfo.counting = archive_->indexVersion() == 0;  // never listed yet
+    }
     const SettingsMenuResult r = d.menu.draw(store_, menuOpen_, editMode_, snapshot.lastReport != nullptr,
-                                             archive_ != nullptr, snapshot.filter, now);
+                                             archiveInfo, snapshot.filter, now);
     changed |= r.changed;
     pipelineChanged = r.pipelineChanged;
     if (r.showLastSummary && snapshot.lastReport) {

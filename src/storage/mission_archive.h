@@ -1,7 +1,8 @@
 #pragma once
 // MissionArchive: saves finished missions to a directory (format in mission_files.h), lists
-// and loads them back, all on one background worker thread, so the caller (the render
-// thread in game) never blocks on file I/O.
+// and loads them back, all on one background worker thread, so the callers (the game thread
+// through MissionArchiveRecorder, the render thread through the history window) never block
+// on file I/O.
 //
 // Thread safety: every public member may be called from any thread. Jobs run one at a time
 // in submission order on the worker; results come back as copies (lastSave(), index()) or
@@ -68,6 +69,8 @@ class MissionArchive {
   // Re-reads the directory (JSON files only, corrupt ones skipped) into index().
   void refreshAsync();
   MissionIndex index() const;
+  // index().entries.size() without the copy.
+  std::size_t indexSize() const;
   std::uint64_t indexVersion() const { return indexVersion_.load(); }
 
   // Stats + trace of one archived mission. Poll the future with wait_for(0).

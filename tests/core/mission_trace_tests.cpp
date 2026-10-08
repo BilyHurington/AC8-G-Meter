@@ -24,7 +24,7 @@ FlightMetrics metrics(double g) {
 // One valid sample dtS after the previous one.
 void step(MissionTracker& t, double dtS, const FlightMetrics& m) {
   t.addTime(dtS);
-  t.add(m, dtS, false);
+  t.add(m, dtS);
 }
 
 }  // namespace
@@ -77,8 +77,15 @@ TEST_CASE("trace columns: onset, AoA validity, high-G flag, warm-up fill") {
   b.onsetRate = -4.0;  // larger magnitude wins, sign kept
   b.aoaValid = true;
   b.aoaDeg = 14.0;
-  b.inHighG = true;
   step(t, 0.05, b);
+  // The high-G flag comes from the sustained path (episodes of the sustained G).
+  SustainedSample sus;
+  sus.g = 7.0;
+  sus.atS = 0.1;
+  sus.dtS = 0.05;
+  sus.inHighG = true;
+  sus.highGEntered = true;
+  t.addSustained(sus);
   // Estimator warm-up after a reset: time passes without valid metrics, then one sample
   // stands for all of it.
   t.addTime(0.25);

@@ -10,13 +10,16 @@
 #include <imgui.h>
 
 #include "config/hotkey_names.h"
+#include "core/pipeline.h"
 #include "storage/mission_archive.h"
+#include "storage/mission_recorder.h"
 #include "ui/g_chart.h"
 #include "ui/mission_history.h"
 #include "ui/mission_summary.h"
 #include "ui/hotkey_input.h"
 #include "ui/layout.h"
 #include "ui/overlay_layer.h"
+#include "ui/settings_menu.h"
 #include "ui/style.h"
 #include "ui/telemetry_ui.h"
 
@@ -83,7 +86,7 @@ MetricsSnapshot fakeSnapshot(std::uint32_t reportId) {
     r->stats.extremeGSamples = 42;
     for (int i = 0; i < 2500; ++i) {
       const float g = static_cast<float>(1.0 + 5.0 * ((i % 100) / 100.0));
-      r->trace.push({g, g - 0.2f, g + 0.4f, 2.0f, 8.0f, 250.0f, 3000.0f, g > 5.5f});
+      r->trace.push({g, g - 0.2f, g + 0.4f, g - 0.1f, 2.0f, 8.0f, 250.0f, 3000.0f, g > 5.5f});
     }
     s.lastReport = r;
   }
@@ -319,19 +322,24 @@ TEST_CASE("live missions are archived and the summary / history windows draw") {
   TelemetryUi ui(store);
   REQUIRE(ui.loadFonts(FT_SOURCE_DIR "/assets/fonts/B612Mono-Regular.ttf"));
   MissionArchive archive(freshArchiveDir("history_archive"));
-  ui.setMissionArchive(&archive);
+  MissionArchiveRecorder recorder(archive);
+  ui.setMissionArchive(&archive, &recorder);
   ImGuiIO& io = ImGui::GetIO();
   double now = 0.0;
 
-  // Two finished missions arrive: each is saved once; the summary shows the save status.
+  // Two finished missions arrive; the recorder (game thread, called by the pipeline) saves
+  // each, the UI only shows the summary and the save status.
   MetricsSnapshot first = fakeSnapshot(1);
   std::const_pointer_cast<MissionReport>(first.lastReport)->stats.hasGData = true;
+  recorder.onMissionEnded(first.lastReport);
   for (int i = 0; i < 3; ++i) im.frame(ui, first, now += 1.0 / 60.0);
   archive.flush();
   CHECK(archive.lastSave().state == SaveStatus::State::Saved);
-  CHECK(archive.lastSave().report == first.lastReport);
+  REQUIRE(archive.lastSave().report);
+  CHECK(archive.lastSave().report == first.lastReport);  // shared, not copied
   MetricsSnapshot second = fakeSnapshot(2);
   std::const_pointer_cast<MissionReport>(second.lastReport)->stats.hasGData = true;
+  recorder.onMissionEnded(second.lastReport);
   for (int i = 0; i < 3; ++i) im.frame(ui, second, now += 1.0 / 60.0);
   archive.flush();
   CHECK(archive.index().entries.size() == 2);
@@ -362,11 +370,133 @@ TEST_CASE("live missions are archived and the summary / history windows draw") {
   im.frame(ui, second, now += 1.0 / 60.0);
   CHECK_FALSE(ui.wantsInput());
 
-  // Saving off: nothing new is written.
+  // Saving off in the settings: the UI turns the recorder off; nothing new is written.
+  CHECK(recorder.enabled());
   store.settings().history.saveMissions = false;
-  for (int i = 0; i < 3; ++i) im.frame(ui, fakeSnapshot(3), now += 1.0 / 60.0);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  CHECK_FALSE(recorder.enabled());
+  const MetricsSnapshot third = fakeSnapshot(3);
+  std::const_pointer_cast<MissionReport>(third.lastReport)->stats.hasGData = true;
+  recorder.onMissionEnded(third.lastReport);
+  for (int i = 0; i < 3; ++i) im.frame(ui, third, now += 1.0 / 60.0);
   archive.flush();
   CHECK(archive.index().entries.size() == 2);
+
+  // The retention limit follows the setting as well.
+  store.settings().history.saveMissions = true;
+  store.settings().history.maxSavedMissions = 1;
+  im.frame(ui, third, now += 1.0 / 60.0);
+  CHECK(recorder.enabled());
+  auto fourth = std::make_shared<MissionReport>(*fakeSnapshot(4).lastReport);
+  fourth->stats.hasGData = true;
+  recorder.onMissionEnded(fourth);
+  archive.flush();
+  CHECK(archive.index().entries.size() == 1);
+}
+
+TEST_CASE("the summary pops for a new report even when a recreated pipeline reuses its id") {
+  HeadlessImGui im;
+  SettingsStore store(tmpSettings("idrestart.json"));
+  TelemetryUi ui(store);
+  REQUIRE(ui.loadFonts(FT_SOURCE_DIR "/assets/fonts/B612Mono-Regular.ttf"));
+  double now = 0.0;
+
+  const MetricsSnapshot first = fakeSnapshot(1);
+  for (int i = 0; i < 3; ++i) im.frame(ui, first, now += 1.0 / 60.0);
+  CHECK(ui.summaryOpen());
+  ui.showSummary(false);
+  for (int i = 0; i < 3; ++i) im.frame(ui, first, now += 1.0 / 60.0);
+  CHECK_FALSE(ui.summaryOpen());  // the same report does not pop again
+
+  // The host recreated the pipeline: its first mission is id 1 again, but a new report.
+  const MetricsSnapshot restarted = fakeSnapshot(1);
+  REQUIRE(restarted.lastReport != first.lastReport);
+  im.frame(ui, restarted, now += 1.0 / 60.0);
+  CHECK(ui.summaryOpen());
+}
+
+TEST_CASE("keep-missions changes that delete saved missions need confirmation") {
+  // (current limit, new limit, saved missions) -> missions to confirm (0 = apply directly)
+  CHECK(missionsDeletedByNewLimit(50, 10, 30) == 20);
+  CHECK(missionsDeletedByNewLimit(0, 10, 30) == 20);    // from unlimited
+  CHECK(missionsDeletedByNewLimit(50, 29, 30) == 1);
+  CHECK(missionsDeletedByNewLimit(50, 30, 30) == 0);    // all still fit
+  CHECK(missionsDeletedByNewLimit(50, 40, 30) == 0);
+  CHECK(missionsDeletedByNewLimit(10, 0, 30) == 0);     // to unlimited
+  CHECK(missionsDeletedByNewLimit(10, 20, 30) == 0);    // raising the limit
+  CHECK(missionsDeletedByNewLimit(20, 10, 30) == 20);   // lower than before: the total is shown
+  CHECK(missionsDeletedByNewLimit(10, 10, 30) == 0);    // unchanged
+  CHECK(missionsDeletedByNewLimit(50, 10, 0) == 0);     // nothing saved
+
+  // Headless: the menu draws with the history section and a known count.
+  HeadlessImGui im;
+  SettingsStore store(tmpSettings("keepmissions.json"));
+  TelemetryUi ui(store);
+  REQUIRE(ui.loadFonts(FT_SOURCE_DIR "/assets/fonts/B612Mono-Regular.ttf"));
+  MissionArchive archive(freshArchiveDir("keep_missions"));
+  MissionArchiveRecorder recorder(archive);
+  ui.setMissionArchive(&archive, &recorder);
+  ui.setMenuOpen(true);
+  double now = 0.0;
+  for (int i = 0; i < 3; ++i) im.frame(ui, fakeSnapshot(0), now += 1.0 / 60.0);
+  archive.flush();
+  CHECK(archive.indexVersion() >= 1);  // opening the menu lists the folder (for the count)
+  CHECK(store.settings().history.maxSavedMissions == 50);
+}
+
+TEST_CASE("history window: closing it abandons a pending load; a second click switches rows") {
+  HeadlessImGui im;
+  MissionArchive archive(freshArchiveDir("history_cancel"));
+  for (std::uint32_t id = 1; id <= 3; ++id) archive.saveAsync(std::make_shared<MissionReport>(*fakeSnapshot(id).lastReport));
+  archive.flush();
+  MissionHistoryWindow window;
+  bool open = true;
+  auto frame = [&] {
+    ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    MissionHistoryWindow::Result r = window.draw(archive, open);
+    ImGui::Render();
+    if (ImDrawData* dd = ImGui::GetDrawData(); dd && dd->Textures)
+      for (ImTextureData* tex : *dd->Textures)
+        if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_Destroyed) tex->SetStatus(ImTextureStatus_OK);
+    return r;
+  };
+  frame();
+  archive.flush();
+  frame();
+  frame();
+  CHECK_FALSE(window.readingFolder());
+  const std::vector<MissionIndexEntry> entries = archive.index().entries;
+  REQUIRE(entries.size() == 3);
+
+  // Start a load, close the window before it is polled, let the load finish meanwhile.
+  window.requestLoad(archive, entries[0]);
+  CHECK(window.loading());
+  open = false;
+  CHECK_FALSE(frame().report);
+  CHECK_FALSE(window.loading());
+  archive.flush();
+  for (int i = 0; i < 3; ++i) CHECK_FALSE(frame().report);
+
+  // Reopen: the listing is re-read ("Reading folder..." until it is done), and the abandoned
+  // load never pops a summary.
+  const std::uint64_t versionBefore = archive.indexVersion();
+  open = true;
+  CHECK_FALSE(frame().report);
+  CHECK((window.readingFolder() || archive.indexVersion() > versionBefore));
+  archive.flush();
+  for (int i = 0; i < 3; ++i) CHECK_FALSE(frame().report);
+  CHECK_FALSE(window.readingFolder());
+
+  // Two clicks in a row (second while the first is loading): the second row wins.
+  window.requestLoad(archive, entries[0]);
+  window.requestLoad(archive, entries[2]);
+  archive.flush();
+  MissionHistoryWindow::Result r = frame();
+  REQUIRE(r.report);
+  CHECK(r.entry.path == entries[2].path);
+  CHECK(r.report->id == entries[2].id);
+  for (int i = 0; i < 3; ++i) CHECK_FALSE(frame().report);  // the first load is never delivered
 }
 
 TEST_CASE("history window: clicking a row loads that mission without blocking") {
@@ -429,4 +559,58 @@ TEST_CASE("history window: clicking a row loads that mission without blocking") 
     ImGui::Render();
   }
   CHECK(summaryOpen);
+}
+
+TEST_CASE("results screen: dual G rows, average-G table and its chart highlight") {
+  // A real mission through the pipeline: 7 G for 6 s with a short 11 G bump, 70 s in all.
+  TelemetryPipeline p;
+  double vz = 0.0, z = 3000.0;
+  for (int i = 0; i < 70 * 60; ++i) {
+    const double t = i / 60.0;
+    const double nz = (t >= 20.0 && t < 26.0) ? 7.0 : ((t >= 40.0 && t < 40.1) ? 11.0 : 1.0);
+    RawFlightSample s;
+    s.t = t;
+    s.position = {200.0 * t, 0.0, z};
+    s.velocity = Vec3{200.0, 0.0, vz};
+    s.phase = MissionPhase::Active;
+    p.push(s);
+    vz += (nz - 1.0) * kG0 / 60.0;
+    z += vz / 60.0;
+  }
+  RawFlightSample end;
+  end.t = 70.0;
+  end.position = {14000.0, 0.0, z};
+  end.velocity = Vec3{200.0, 0.0, vz};
+  end.phase = MissionPhase::Ended;
+  p.push(end);
+  const auto report = p.snapshot().lastReport;
+  REQUIRE(report);
+  CHECK(report->stats.hasSustainedData);
+  CHECK(report->stats.maxG > report->stats.sustainedMaxG + 2.0);  // the bump: peak only
+  REQUIRE(report->windowed.size() == 5);
+  CHECK(report->windowed[4].valid);  // 60 s of a 70 s mission
+  CHECK(report->windowed[1].maxAvgG == doctest::Approx(7.0).epsilon(0.02));
+
+  HeadlessImGui im;
+  ImGui::GetIO().Fonts->AddFontDefault();
+  GChart chart;
+  bool open = true;
+  int highlighted = 0;
+  // Sweep the mouse over the whole window: every row and cell gets hovered at some point.
+  for (int y = 0; y < 1080; y += 12) {
+    for (int x = 400; x < 1520; x += 160) {
+      ImGui::GetIO().AddMousePosEvent(static_cast<float>(x), static_cast<float>(y));
+      ImGuiIO& io = ImGui::GetIO();
+      io.DeltaTime = 1.0f / 60.0f;
+      ImGui::NewFrame();
+      drawMissionSummary(*report, SummaryContext{}, chart, open, nullptr);
+      ImGui::Render();
+      if (ImDrawData* dd = ImGui::GetDrawData(); dd && dd->Textures)
+        for (ImTextureData* tex : *dd->Textures)
+          if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_Destroyed) tex->SetStatus(ImTextureStatus_OK);
+      if (chart.highlightPending()) ++highlighted;
+    }
+  }
+  CHECK(open);
+  CHECK(highlighted > 0);
 }

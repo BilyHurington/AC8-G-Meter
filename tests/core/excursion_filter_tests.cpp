@@ -159,7 +159,7 @@ TEST_CASE("excursion filter: uneven sample intervals, bounded delay, flush") {
   CHECK(stuck.pending() <= 2 * ExcursionFilter::kMaxPending);
 }
 
-TEST_CASE("mission: a 0.15 s 20 G bump inside a 5 G turn is not the mission max") {
+TEST_CASE("mission: a 0.15 s 20 G bump inside a 5 G turn is the peak max, not the sustained max") {
   auto nz = [](double t) {
     if (t < 1.0) return 1.0;
     if (t < 1.5) return 1.0 + 8.0 * (t - 1.0);  // to 5 G
@@ -168,16 +168,24 @@ TEST_CASE("mission: a 0.15 s 20 G bump inside a 5 G turn is not the mission max"
   };
   const MissionRun run = flyMission(nz, 5.0, 0.2);
   const MissionStats& s = run.report.stats;
-  CHECK(run.liveMaxG > 15.0);  // the live G (HUD) still shows the bump
-  CHECK(s.maxG == Approx(5.0).epsilon(0.01));
-  CHECK(s.highGEpisodes == 0);  // threshold 6 G: the bump creates no episode
-  CHECK(*std::max_element(run.report.trace.gMax.begin(), run.report.trace.gMax.end()) == Approx(5.0f).epsilon(0.01));
-  CHECK(s.maxOnset < 20.0);  // the 5 G ramp is 8 G/s; the bump's edges (~±300 G/s) are gone
+  CHECK(run.liveMaxG > 15.0);  // the live G (HUD) shows the bump
+  // Peak: exactly what the HUD showed. Sustained: the 5 G turn.
+  CHECK(s.maxG == run.liveMaxG);
+  CHECK(s.maxGAtS == Approx(3.1).epsilon(0.03));
+  REQUIRE(s.hasSustainedData);
+  CHECK(s.sustainedMaxG == Approx(5.0).epsilon(0.01));
+  CHECK(s.highGEpisodes == 0);  // threshold 6 G: the bump creates no (sustained) episode
+  const MissionTrace& tr = run.report.trace;
+  CHECK(*std::max_element(tr.gMax.begin(), tr.gMax.end()) > 15.0f);  // the band keeps the bump
+  float susMax = -1e9f;
+  for (float v : tr.gSustained) susMax = std::max(susMax, v);
+  CHECK(susMax == Approx(5.0f).epsilon(0.01));  // the sustained line does not
+  CHECK(s.maxOnset > 20.0);  // onset extremes are the live ones: the bump's edges count
 
-  // Filter off: the bump counts, exactly as the live G showed it.
+  // Filter off: sustained = peak, and the bump makes an episode.
   const MissionRun off = flyMission(nz, 5.0, 0.0);
   CHECK(off.report.stats.maxG == off.liveMaxG);
-  CHECK(off.report.stats.maxG > 15.0);
+  CHECK(off.report.stats.sustainedMaxG == off.report.stats.maxG);
   CHECK(off.report.stats.highGEpisodes == 1);
 }
 
@@ -186,17 +194,19 @@ TEST_CASE("mission: a 0.3 s plateau at 12 G is kept, at the right mission time")
   const MissionRun run = flyMission(nz, 4.0, 0.2);
   const MissionStats& s = run.report.stats;
   CHECK(s.maxG == Approx(12.0).epsilon(0.01));
-  CHECK(s.maxGAtS > 2.0);
-  CHECK(s.maxGAtS < 2.4);  // mission time = flight time here (the mission starts at t = 0)
+  CHECK(s.sustainedMaxG == Approx(12.0).epsilon(0.01));
+  CHECK(s.sustainedMaxGAtS > 2.0);
+  CHECK(s.sustainedMaxGAtS < 2.4);  // mission time = flight time here (the mission starts at t = 0)
   CHECK(s.highGEpisodes == 1);
   CHECK(s.longestHighGS == Approx(0.3).epsilon(0.15));
 }
 
-TEST_CASE("mission: a 0.1 s dip to -4 G in level flight is not the mission min") {
+TEST_CASE("mission: a 0.1 s dip to -4 G in level flight is the peak min, not the sustained min") {
   auto nz = [](double t) { return t >= 2.0 && t < 2.1 ? -4.0 : 1.0; };
   const MissionRun run = flyMission(nz, 4.0, 0.2);
   CHECK(run.liveMinG < -2.0);
-  CHECK(run.report.stats.minG == Approx(1.0).epsilon(0.01));
+  CHECK(run.report.stats.minG == run.liveMinG);
+  CHECK(run.report.stats.sustainedMinG == Approx(1.0).epsilon(0.01));
 }
 
 TEST_CASE("mission: the filter delay loses nothing at the mission end, with uneven frames") {
@@ -211,13 +221,14 @@ TEST_CASE("mission: the filter delay loses nothing at the mission end, with unev
     CHECK(s.durationS == off.report.stats.durationS);  // mission time is not delayed
     CHECK(binSum(s) == Approx(binSum(off.report.stats)).epsilon(1e-9));
     CHECK(binSum(s) > s.durationS - 0.2);
-    CHECK(s.maxG == Approx(7.0).epsilon(0.01));
-    CHECK(s.maxGAtS > 2.7);
-    CHECK(s.maxGAtS <= s.durationS);
+    CHECK(s.sustainedMaxG == Approx(7.0).epsilon(0.01));
+    CHECK(s.sustainedMaxGAtS > 2.7);
+    CHECK(s.sustainedMaxGAtS <= s.durationS);
     CHECK(s.highGEpisodes == 1);
     CHECK(on.report.trace.endS() >= s.durationS - 1e-9);  // the last bucket may be partial
     CHECK(on.report.trace.endS() < s.durationS + 1.0 / on.report.trace.hz);
     CHECK(on.report.trace.gMax.back() == Approx(7.0f).epsilon(0.01));
+    CHECK(on.report.trace.gSustained.back() == Approx(7.0f).epsilon(0.01));  // flushed to the end
     CHECK(s.acceptedSamples == off.report.stats.acceptedSamples);
   }
 }

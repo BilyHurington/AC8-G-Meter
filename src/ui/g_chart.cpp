@@ -41,6 +41,34 @@ void labelBox(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* text) {
 
 std::string gLabel(double g) { return formatNumber(g, 1, true) + " G"; }
 
+constexpr ImVec4 kSustainedMark{1.0f, 1.0f, 1.0f, 1.0f};  // sustained max / min markers
+
+// Label plates already placed this frame; a new one moves away from the curve (up for a
+// maximum, down for a minimum, the other way at the plot edge) until it overlaps none.
+struct LabelPlacer {
+  std::vector<ImVec4> boxes;  // x0, y0, x1, y1
+  float top = 0.0f, bottom = 0.0f;
+
+  ImVec2 place(float x, float y, ImVec2 size, bool up) {
+    const float step = size.y + 2.0f;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+      const float yy = std::clamp(y, top + 1.0f, bottom - size.y - 1.0f);
+      bool overlaps = false;
+      for (const ImVec4& b : boxes)
+        if (x - 3.0f < b.z && x + size.x + 3.0f > b.x && yy < b.w && yy + size.y > b.y) overlaps = true;
+      if (!overlaps) {
+        boxes.emplace_back(x - 3.0f, yy, x + size.x + 3.0f, yy + size.y);
+        return ImVec2(x, yy);
+      }
+      // At the edge, reverse direction.
+      if ((up && yy <= top + 1.0f) || (!up && yy >= bottom - size.y - 1.0f)) up = !up;
+      y = yy + (up ? -step : step);
+    }
+    boxes.emplace_back(x - 3.0f, y, x + size.x + 3.0f, y + size.y);
+    return ImVec2(x, y);
+  }
+};
+
 // Value shown for the secondary series of a point: AoA is a maximum, onset keeps its sign.
 float secondaryValue(const ChartPoint& p, ChartSeries s) {
   if (s == ChartSeries::Aoa) return p.secHi;
@@ -92,6 +120,8 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
   m.max = ImVec2(boxMax.x - (showSecondary ? fs * 3.2f : fs * 0.8f), boxMax.y - fs * 1.6f);
   dl->AddRectFilled(m.min, m.max, ImGui::GetColorU32(ImVec4(0.03f, 0.05f, 0.04f, 1.0f)), 3.0f);
   dl->AddRect(m.min, m.max, ImGui::GetColorU32(ImGuiCol_Border), 3.0f);
+  const Highlight highlight = highlight_;
+  highlight_.set = false;  // one frame only
   if (trace.empty() || m.max.x - m.min.x < 10.0f || m.max.y - m.min.y < 10.0f) {
     const char* msg = "No trace recorded.";
     const ImVec2 ts = ImGui::CalcTextSize(msg);
@@ -108,6 +138,7 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
     key_ = key;
     viewValid_ = false;
     pointsColumns_ = -1;
+    hasSustained_ = traceHasSustained(trace);
   }
   if (!viewValid_) {
     view_ = {minT, maxT};
@@ -164,6 +195,14 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
     dl->AddRectFilled(ImVec2(m.x(points_[i].t) - half, m.min.y), ImVec2(m.x(points_[j].t) + half, m.max.y),
                       col(kHudWarn, 0.13f));
     i = j + 1;
+  }
+  // Highlighted span (results table hover), with its edges marked.
+  if (highlight.set && highlight.t1 > highlight.t0) {
+    const ImVec4 c = highlight.warm ? kHudWarn : kHudSecondary;
+    const float x0 = m.x(highlight.t0), x1 = std::max(m.x(highlight.t1), x0 + 1.0f);
+    dl->AddRectFilled(ImVec2(x0, m.min.y), ImVec2(x1, m.max.y), col(c, 0.22f));
+    dl->AddLine(ImVec2(x0, m.min.y), ImVec2(x0, m.max.y), col(c, 0.9f), 1.5f);
+    dl->AddLine(ImVec2(x1, m.min.y), ImVec2(x1, m.max.y), col(c, 0.9f), 1.5f);
   }
   dl->PopClipRect();
 
@@ -226,8 +265,9 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
     flush();
   }
 
-  // gMin..gMax band, then the mean line on top.
-  const ImU32 band = col(kHudAccent, 0.22f);
+  // Live gMin..gMax band, then the sustained line on top (the live mean when the trace has no
+  // sustained values), with gaps where it has none.
+  const ImU32 band = col(kHudAccent, 0.2f);
   for (std::size_t i = 0; i + 1 < points_.size(); ++i) {
     const ChartPoint& a = points_[i];
     const ChartPoint& b = points_[i + 1];
@@ -235,35 +275,101 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
     dl->AddQuadFilled(ImVec2(xa, m.y(a.gHi)), ImVec2(xb, m.y(b.gHi)), ImVec2(xb, m.y(b.gLo)), ImVec2(xa, m.y(a.gLo)),
                       band);
   }
-  std::vector<ImVec2> line;
-  line.reserve(points_.size());
-  for (const ChartPoint& p : points_) line.emplace_back(m.x(p.t), m.y(p.gMean));
-  if (line.size() == 1) line.emplace_back(line[0].x + 1.0f, line[0].y);
-  dl->AddPolyline(line.data(), static_cast<int>(line.size()), col(kHudAccent, 1.0f), 1.5f);
+  {
+    std::vector<ImVec2> seg;
+    auto flush = [&] {
+      if (seg.size() == 1) seg.emplace_back(seg[0].x + 1.0f, seg[0].y);
+      if (seg.size() >= 2) dl->AddPolyline(seg.data(), static_cast<int>(seg.size()), col(kHudAccent, 1.0f), 1.6f);
+      seg.clear();
+    };
+    for (const ChartPoint& p : points_) {
+      const float v = hasSustained_ ? p.gSustained : p.gMean;
+      if (!std::isfinite(v)) {
+        flush();
+        continue;
+      }
+      seg.emplace_back(m.x(p.t), m.y(v));
+    }
+    flush();
+  }
 
-  // Labels last, on plates over the curve: threshold, then max / min G markers (from the
-  // statistics, which see every sample).
+  // Labels last, on plates over the curve: threshold, then the markers (from the statistics,
+  // which see every sample): peak max / min (orange dot, on the band) and sustained max / min
+  // (white diamond, on the line).
+  LabelPlacer labels;
+  labels.top = m.min.y;
+  labels.bottom = m.max.y;
+
+  const MissionStats& st = report.stats;
+  // Marker positions are obstacles for every label, so no label hides a marker.
+  auto inView = [&](double t) { return t >= view_.t0 && t <= view_.t1; };
+  auto reserveMarker = [&](double t, double g) {
+    if (!inView(t)) return;
+    const ImVec2 p(m.x(t), m.y(static_cast<float>(g)));
+    labels.boxes.emplace_back(p.x - 6.0f, p.y - 6.0f, p.x + 6.0f, p.y + 6.0f);
+  };
+  if (st.hasGData) {
+    reserveMarker(st.maxGAtS, st.maxG);
+    reserveMarker(st.minGAtS, st.minG);
+  }
+  if (st.hasSustainedData) {
+    reserveMarker(st.sustainedMaxGAtS, st.sustainedMaxG);
+    reserveMarker(st.sustainedMinGAtS, st.sustainedMinG);
+  }
   char thrLabel[32];
   std::snprintf(thrLabel, sizeof thrLabel, "HIGH-G %.1f", static_cast<double>(threshold));
   const ImVec2 thrSize = ImGui::CalcTextSize(thrLabel);
-  labelBox(dl, ImVec2(m.max.x - thrSize.x - fs * 0.4f, yThr - thrSize.y - 2.0f), col(kHudWarn, 0.9f), thrLabel);
-
-  const MissionStats& st = report.stats;
+  const ImVec2 thrPos = labels.place(m.max.x - thrSize.x - fs * 0.4f, yThr - thrSize.y - 2.0f, thrSize, true);
+  labelBox(dl, thrPos, col(kHudWarn, 0.9f), thrLabel);
+  auto marker = [&](double t, double g, bool above, bool sustained) {
+    if (!inView(t)) return;
+    const ImVec2 p(m.x(t), m.y(static_cast<float>(g)));
+    const ImVec4 c = sustained ? kSustainedMark : kHudWarn;
+    if (sustained) {
+      const float r = 4.5f;
+      dl->AddQuadFilled(ImVec2(p.x, p.y - r), ImVec2(p.x + r, p.y), ImVec2(p.x, p.y + r), ImVec2(p.x - r, p.y),
+                        col(ImVec4(0, 0, 0, 1), 0.8f));
+      dl->AddQuad(ImVec2(p.x, p.y - r), ImVec2(p.x + r, p.y), ImVec2(p.x, p.y + r), ImVec2(p.x - r, p.y), col(c, 1.0f),
+                  1.5f);
+    } else {
+      dl->AddCircleFilled(p, 3.5f, col(c, 1.0f));
+      dl->AddCircle(p, 5.5f, col(c, 0.6f));
+    }
+    const std::string label =
+        std::string(sustained ? (above ? "SUS MAX " : "SUS MIN ") : (above ? "MAX " : "MIN ")) + gLabel(g);
+    const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+    // Peak labels centred over / under their marker, sustained ones beside it.
+    const float lx = sustained ? std::clamp(p.x + 8.0f, m.min.x + 2.0f, m.max.x - ts.x - 2.0f)
+                               : std::clamp(p.x - ts.x * 0.5f, m.min.x + 2.0f, m.max.x - ts.x - 2.0f);
+    const float ly = sustained ? p.y - ts.y * 0.5f : (above ? p.y - ts.y - 6.0f : p.y + 6.0f);
+    const ImVec2 at = labels.place(lx, ly, ts, above);
+    labelBox(dl, at, col(c, 1.0f), label.c_str());
+  };
+  // Sustained first: when both coincide the peak dot stays visible inside the diamond.
+  if (st.hasSustainedData) {
+    marker(st.sustainedMaxGAtS, st.sustainedMaxG, true, true);
+    marker(st.sustainedMinGAtS, st.sustainedMinG, false, true);
+  }
   if (st.hasGData) {
-    auto marker = [&](double t, double g, bool above) {
-      if (t < view_.t0 || t > view_.t1) return;
-      const ImVec2 p(m.x(t), m.y(static_cast<float>(g)));
-      dl->AddCircleFilled(p, 3.5f, col(kHudWarn, 1.0f));
-      dl->AddCircle(p, 5.5f, col(kHudWarn, 0.6f));
-      const std::string label = (above ? "MAX " : "MIN ") + gLabel(g);
-      const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
-      const float lx = std::clamp(p.x - ts.x * 0.5f, m.min.x + 2.0f, m.max.x - ts.x - 2.0f);
-      float ly = above ? p.y - ts.y - 6.0f : p.y + 6.0f;
-      ly = std::clamp(ly, m.min.y + 1.0f, m.max.y - ts.y - 1.0f);
-      labelBox(dl, ImVec2(lx, ly), col(kHudWarn, 1.0f), label.c_str());
-    };
-    marker(st.maxGAtS, st.maxG, true);
-    marker(st.minGAtS, st.minG, false);
+    marker(st.maxGAtS, st.maxG, true, false);
+    marker(st.minGAtS, st.minG, false, false);
+  }
+
+  // Legend, top left.
+  {
+    const char* bandText = "live min-max";
+    const char* lineText = hasSustained_ ? "sustained" : "live mean";
+    const float h = ImGui::GetTextLineHeight();
+    const float w = ImGui::CalcTextSize(bandText).x + ImGui::CalcTextSize(lineText).x + fs * 4.6f;
+    ImVec2 o(m.min.x + fs * 0.4f, m.min.y + fs * 0.3f);
+    dl->AddRectFilled(ImVec2(o.x - 3.0f, o.y), ImVec2(o.x + w, o.y + h), col(ImVec4(0, 0, 0, 1), 0.65f), 2.0f);
+    dl->AddRectFilled(ImVec2(o.x, o.y + h * 0.25f), ImVec2(o.x + fs, o.y + h * 0.75f), col(kHudAccent, 0.35f));
+    o.x += fs * 1.3f;
+    textAt(dl, o, axisText, bandText);
+    o.x += ImGui::CalcTextSize(bandText).x + fs * 0.8f;
+    dl->AddLine(ImVec2(o.x, o.y + h * 0.5f), ImVec2(o.x + fs, o.y + h * 0.5f), col(kHudAccent, 1.0f), 1.6f);
+    o.x += fs * 1.3f;
+    textAt(dl, o, axisText, lineText);
   }
   dl->PopClipRect();
 
@@ -286,11 +392,13 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
     const double t = trace.timeAt(i) + 0.5 / trace.hz;
     const float x = m.x(t);
     dl->AddLine(ImVec2(x, m.min.y), ImVec2(x, m.max.y), col(ImVec4(1, 1, 1, 1), 0.35f));
-    dl->AddCircleFilled(ImVec2(x, m.y(p.gMean)), 3.0f, col(kHudAccent, 1.0f));
+    const float lineG = hasSustained_ && std::isfinite(p.gSustained) ? p.gSustained : p.gMean;
+    dl->AddCircleFilled(ImVec2(x, m.y(lineG)), 3.0f, col(kHudAccent, 1.0f));
     ImGui::BeginTooltip();
     ImGui::TextColored(kHudAccent, "%s", formatClock(t).c_str());
     ImGui::Text("G     %s  (min %s, max %s)", formatNumber(p.gMean, 2, true).c_str(),
                 formatNumber(p.gMin, 2, true).c_str(), formatNumber(p.gMax, 2, true).c_str());
+    if (hasSustained_) ImGui::Text("Sust. %s", formatNumber(p.gSustained, 2, true).c_str());
     ImGui::Text("Onset %s G/s", formatNumber(p.onset, 1, true).c_str());
     if (std::isnan(p.aoaDeg)) ImGui::Text("AoA   --");
     else ImGui::Text("AoA   %s%s", formatNumber(p.aoaDeg, 1, false).c_str(), kDegreeSign);

@@ -9,7 +9,8 @@
 //     -> load factor in body axes (attitude at the acceleration's time)
 //     -> median + EMA smoothing -> G per GMode -> onset rate
 //     -> AoA / sideslip, sustained high-G timer
-//     -> mission state machine + statistics
+//     -> mission state machine (MissionSession) + statistics: peak values from the live G,
+//        sustained values / high-G episodes via the sustained-G path (MissionFeed)
 //     -> consumers (IMetricsConsumer)
 //
 // Robust to variable frame time. Not thread-safe: call from one thread and hand the
@@ -80,9 +81,10 @@ struct PipelineConfig {
   double teleportToleranceM = 50.0; // |dp - v*dt| above this is treated as a teleport
   double minSpeedForAoa = 20.0;     // m/s
   double traceHz = 20.0;            // MissionReport::trace resolution (buckets per mission second)
-  // Mission statistics and the trace ignore G bumps and dips shorter than this (MissionFeed,
-  // ExcursionFilter); they then lag the live G by up to twice this. 0 = off. The live G is
-  // never filtered this way.
+  // W of the *sustained* mission statistics (MissionStats::sustained*, high-G episodes, the
+  // trace's gSustained line): G bumps and dips shorter than ~W are removed there
+  // (SustainedFilter, MissionFeed), which then lag the live G by up to ~2 W. 0 = sustained
+  // values equal the live ones. The live G and the peak statistics are never filtered this way.
   double minExcursionS = 0.2;
 };
 
@@ -96,7 +98,9 @@ class IMetricsConsumer {
   // (non-finite, bad timestamp, spike) produce no call.
   virtual void onMetrics(const FlightMetrics& metrics, MissionPhase phase) = 0;
   virtual void onMissionStarted() {}
-  virtual void onMissionEnded(const MissionReport& /*report*/) {}
+  // The report is the object published as MetricsSnapshot::lastReport (shared, immutable), so
+  // a consumer can keep it without copying and recognise it later by pointer identity.
+  virtual void onMissionEnded(const std::shared_ptr<const MissionReport>& /*report*/) {}
   // Pipeline reset / discontinuity (teleport, respawn). Not called for a velocity-only jump
   // (DataQuality::resetsJump), which may be a real manoeuvre.
   virtual void onReset() {}

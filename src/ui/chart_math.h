@@ -38,8 +38,9 @@ enum class ChartSeries : std::uint8_t { None, Onset, Aoa };
 // centre falls in one pixel column (zoomed out), so drawing is O(width) at any trace length.
 struct ChartPoint {
   double t = 0.0;               // mission time (bucket centre, or column centre)
-  float gLo = 0.0f, gHi = 0.0f; // min of gMin / max of gMax: peaks always survive
-  float gMean = 0.0f;           // mean of gMean
+  float gLo = 0.0f, gHi = 0.0f; // min of gMin / max of gMax (live G): peaks always survive
+  float gMean = 0.0f;           // mean of gMean (live G)
+  float gSustained = 0.0f;      // mean of the finite gSustained, NaN when none
   float secLo = 0.0f, secHi = 0.0f;  // secondary series range (NaN when none / invalid)
   bool highG = false;           // some bucket was in a high-G episode
 };
@@ -48,6 +49,9 @@ struct ChartPoint {
 // at most ~`columns` of them.
 void decimateTrace(const MissionTrace& trace, double t0, double t1, int columns, ChartSeries secondary,
                    std::vector<ChartPoint>& out);
+
+// True when some bucket has a sustained G value (archives from before it have none).
+bool traceHasSustained(const MissionTrace& trace);
 
 // Value range of the points (G or secondary), NaN-safe; false when there is no finite value.
 bool pointsRange(const std::vector<ChartPoint>& points, bool secondary, float& lo, float& hi);

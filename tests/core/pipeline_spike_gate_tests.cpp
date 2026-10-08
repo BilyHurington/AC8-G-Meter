@@ -144,8 +144,9 @@ TEST_CASE("a step of more than 30 G in one frame is a velocity jump, not a disco
   CHECK(r.resets == 0);
   CHECK(r.invalid == 0);
   CHECK(r.snap.mission.highGEpisodes == 1);
-  // Live mission stats lag the G by 2 x minExcursionS (0.4 s) until the mission ends.
-  CHECK(r.snap.mission.longestHighGS == Approx(4.5).epsilon(0.02));
+  // Sustained statistics lag the G by W / 8 + 2 W (0.425 s) until the mission ends, and the
+  // first 1.125 W of the stream (the mission's start) cannot start an episode.
+  CHECK(r.snap.mission.longestHighGS == Approx(4.23).epsilon(0.02));
   CHECK(r.snap.mission.maxG == Approx(42.0).epsilon(0.01));
   CHECK(r.snap.current.g == Approx(10.0).epsilon(0.01));
 }

@@ -13,14 +13,38 @@
 
 namespace ft {
 
+void MissionHistoryWindow::cancelLoad() {
+  // A promise-backed future does not block on destruction; the worker's result is discarded.
+  pending_ = {};
+  pendingPath_.clear();
+}
+
+void MissionHistoryWindow::requestLoad(MissionArchive& archive, const MissionIndexEntry& entry) {
+  cancelLoad();
+  pending_ = archive.loadAsync(entry);
+  pendingPath_ = entry.path;
+  loadError_.clear();
+}
+
 MissionHistoryWindow::Result MissionHistoryWindow::draw(MissionArchive& archive, bool& open) {
   Result result;
   if (!open) {
+    if (wasOpen_) {
+      cancelLoad();  // a load finishing after the window closed must not pop a summary later
+      loadError_.clear();
+    }
     wasOpen_ = false;
     confirmDelete_.reset();
     return result;
   }
-  if (!wasOpen_) archive.refreshAsync();  // the directory may have changed while closed
+  if (!wasOpen_) {
+    // The directory may have changed while closed. Take the index right away: it is marked
+    // `refreshing` from here on, so the first frame says "Reading folder..." rather than the
+    // count from the last time the window was open.
+    archive.refreshAsync();
+    index_ = archive.index();
+    seenVersion_ = index_.version;
+  }
   wasOpen_ = true;
   if (archive.indexVersion() != seenVersion_ || index_.refreshing) {
     index_ = archive.index();  // copied only while something changes
@@ -56,9 +80,12 @@ MissionHistoryWindow::Result MissionHistoryWindow::draw(MissionArchive& archive,
     return result;
   }
 
-  if (ImGui::Button("Refresh")) archive.refreshAsync();
+  if (ImGui::Button("Refresh")) {
+    archive.refreshAsync();
+    index_.refreshing = true;  // "Reading folder..." from this frame on
+  }
   ImGui::SameLine();
-  if (pending_.valid()) ImGui::TextColored(kHudWarn, "Loading...");
+  if (pending_.valid()) ImGui::TextColored(kHudWarn, "Loading %s...", pathToUtf8(pendingPath_.filename()).c_str());
   else if (index_.refreshing) ImGui::TextColored(kHudWarn, "Reading folder...");
   else ImGui::TextDisabled("%zu saved mission%s", index_.entries.size(), index_.entries.size() == 1 ? "" : "s");
   if (!index_.error.empty()) ImGui::TextColored(kHudError, "%s", index_.error.c_str());
@@ -85,16 +112,14 @@ MissionHistoryWindow::Result MissionHistoryWindow::draw(MissionArchive& archive,
       ImGui::TableNextColumn();
       const bool loadingThis = pending_.valid() && pendingPath_ == e.path;
       const std::string date = formatLocalDateTime(e.savedAtUnix);
+      // The row being loaded stays highlighted; clicking another row switches to that one.
       if (ImGui::Selectable(date.c_str(), loadingThis,
                             ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap) &&
-          !pending_.valid()) {
-        pending_ = archive.loadAsync(e);
-        pendingPath_ = e.path;
-        loadError_.clear();
-      }
+          !loadingThis)
+        requestLoad(archive, e);
       if (ImGui::BeginItemTooltip()) {
         ImGui::TextUnformatted(pathToUtf8(e.path.filename()).c_str());
-        ImGui::TextDisabled("Click to open the summary");
+        ImGui::TextDisabled(loadingThis ? "Loading..." : "Click to open the summary");
         ImGui::EndTooltip();
       }
       ImGui::TableNextColumn();
@@ -107,7 +132,8 @@ MissionHistoryWindow::Result MissionHistoryWindow::draw(MissionArchive& archive,
       ImGui::TableNextColumn();
       ImGui::TextUnformatted(e.hasGData ? formatNumber(e.minG, 1, true, 5).c_str() : "   --");
       ImGui::TableNextColumn();
-      if (e.aborted) ImGui::TextColored(kHudWarn, "aborted");
+      if (loadingThis) ImGui::TextColored(kHudWarn, "loading...");
+      else if (e.aborted) ImGui::TextColored(kHudWarn, "aborted");
       ImGui::TableNextColumn();
       if (ImGui::SmallButton("Delete")) confirmDelete_ = e;
       ImGui::PopID();

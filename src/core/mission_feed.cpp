@@ -1,63 +1,76 @@
 #include "core/mission_feed.h"
 
 namespace ft {
-namespace {
-
-constexpr int kMinOnsetPoints = 3;  // as for the live onset rate
-
-}  // namespace
 
 void MissionFeed::configure(const PipelineConfig& cfg, MissionTracker& mission) {
   highG_.setThresholds(cfg.highGEnter, cfg.highGExit);
-  if (cfg.minExcursionS != filter_.width()) {
-    flush(mission);
-    filter_.setWidth(cfg.minExcursionS);
-    highG_.reset();
-    onset_.reset();
+  const double w = cfg.minExcursionS > 0.0 ? cfg.minExcursionS : 0.0;
+  if (w != filter_.width()) {
+    restart(mission, true, false);
+    filter_.setWidth(w);
   }
 }
 
-void MissionFeed::add(MissionTracker& mission, const FlightMetrics& m, double dtS, bool liveHighGEntered,
-                      double onsetWindowS) {
-  const double now = mission.stats().durationS;
-  if (filter_.width() <= 0.0) {
-    mission.add(m, dtS, liveHighGEntered, now);
-    return;
+void MissionFeed::add(MissionTracker& mission, const FlightMetrics& m, double stepDt, bool inMission) {
+  const bool filtered = filter_.width() > 0.0;
+  streamT_ += stepDt;
+  if (restarted_) {
+    restarted_ = false;
+    // The filter's look-back (W, and W / 8 of pre-smoothing) must lie after the restart.
+    confirmFromT_ = streamT_ + 1.125 * filter_.width();
   }
-  onsetWindowS_ = onsetWindowS;
-  pending_.push_back({m, dtS});
-  filter_.push(now, m.gRaw);
+  Pending p;
+  p.inMission = inMission && mission.open();
+  if (p.inMission) {
+    p.missionT = mission.stats().durationS;
+    p.missionDt = stepDt;
+    p.epoch = epoch_;
+  }
+  pending_.push_back(p);
+  filter_.push(streamT_, filtered ? m.gRaw : m.g);
   drain(mission);
 }
 
 void MissionFeed::drain(MissionTracker& mission) {
-  ExcursionFilter::Sample s;
+  SustainedFilter::Sample s;
   while (!pending_.empty() && filter_.pop(s)) {
-    Pending p = pending_.front();
+    const Pending p = pending_.front();
     pending_.pop_front();
-    FlightMetrics& m = p.m;
-    m.g = s.v;
-    onset_.push(s.t, m.g);
-    onset_.trim(onsetWindowS_, kMinOnsetPoints);
-    m.onsetRate = onset_.size() >= kMinOnsetPoints ? onset_.slope() : 0.0;
-    const HighGTimer::Step step = highG_.update(m.g, p.dtS);
-    m.inHighG = highG_.active();
-    m.highGDurationS = highG_.durationS();
-    mission.add(m, p.dtS, step.entered, s.t);
+    if (!p.inMission || p.epoch != epoch_ || !mission.open()) continue;
+    // Episodes belong to one mission: the timer restarts with the mission's first sample.
+    if (timerEpoch_ != epoch_) {
+      highG_.reset();
+      timerEpoch_ = epoch_;
+    }
+    SustainedSample x;
+    x.g = s.v;
+    x.atS = p.missionT;
+    x.dtS = p.missionDt;
+    x.confirmed = s.t >= confirmFromT_ - 1e-9;
+    // Unconfirmed values can carry an episode on or end it, but not start one.
+    if (x.confirmed || highG_.active()) x.highGEntered = highG_.update(x.g, x.dtS).entered;
+    x.inHighG = highG_.active();
+    x.highGDurationS = highG_.durationS();
+    mission.addSustained(x);
   }
 }
 
-void MissionFeed::flush(MissionTracker& mission) {
-  filter_.flush();
-  if (mission.open()) drain(mission);
-  clear();
+void MissionFeed::restart(MissionTracker& mission, bool keepPending, bool endEpisode) {
+  if (keepPending) {
+    filter_.flush();
+    drain(mission);
+  }
+  filter_.reset();
+  pending_.clear();
+  if (endEpisode) highG_.reset();
+  restarted_ = true;
 }
 
 void MissionFeed::clear() {
   filter_.reset();
   pending_.clear();
   highG_.reset();
-  onset_.reset();
+  restarted_ = true;
 }
 
 }  // namespace ft

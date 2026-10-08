@@ -6,6 +6,9 @@
 
 namespace ft {
 
+// Least-squares onset rate (dG/dt): fewest samples for a slope; metrics are valid from then on.
+inline constexpr int kMinOnsetPoints = 3;
+
 // Running median over the last N samples. Removes single-sample spikes without the lag
 // a low-pass would need to suppress them. N is forced odd and clamped to [1, kMaxWindow].
 class MedianFilter {

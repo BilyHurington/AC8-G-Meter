@@ -4,9 +4,12 @@
 #include <chrono>
 #include <exception>
 #include <fstream>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <utility>
+
+#include "core/windowed_g.h"
 
 namespace ft {
 namespace {
@@ -76,15 +79,6 @@ bool endsWith(const std::string& s, const char* suffix) {
   return s.size() >= sv.size() && s.compare(s.size() - sv.size(), sv.size(), sv) == 0;
 }
 
-// "YYYYMMDD-HHMMSS_m....json": only files this archive named are subject to retention.
-bool isArchiveJsonName(const std::string& name) {
-  if (name.size() < 22 || !endsWith(name, ".json")) return false;
-  for (std::size_t i = 0; i < 15; ++i) {
-    const bool digit = name[i] >= '0' && name[i] <= '9';
-    if (i == 8 ? name[i] != '-' : !digit) return false;
-  }
-  return name[15] == '_' && name[16] == 'm';
-}
 
 bool isStale(const fs::path& p) {
   std::error_code ec;
@@ -126,6 +120,8 @@ LoadedMission loadMission(const MissionIndexEntry& entry) {
     out.error = "trace has " + std::to_string(report->trace.size()) + " rows, expected " + std::to_string(rows);
     return out;
   }
+  // Files from before the N-second averages were stored (schema 1).
+  if (report->windowed.empty()) report->windowed = computeWindowedAverages(report->trace);
   out.entry = e;
   out.report = std::move(report);
   return out;
@@ -249,17 +245,27 @@ void MissionArchive::applyRetention() {
   const int maxSaved = maxSaved_.load();
   if (maxSaved <= 0) return;
   try {
-    std::vector<fs::path> files;
+    // Only files this archive named are subject to retention (exact name pattern).
+    struct Saved {
+      MissionFileStem stem;
+      fs::path json;
+      std::string name;
+    };
+    std::vector<Saved> files;
     std::error_code ec;
-    for (fs::directory_iterator it(dir_, ec), end; !ec && it != end; it.increment(ec))
-      if (isArchiveJsonName(utf8(it->path().filename()))) files.push_back(it->path());
+    for (fs::directory_iterator it(dir_, ec), end; !ec && it != end; it.increment(ec)) {
+      std::string name = utf8(it->path().filename());
+      if (auto stem = parseMissionFileName(name, kMissionJsonSuffix))
+        files.push_back({std::move(*stem), it->path(), std::move(name)});
+    }
     if (files.size() <= static_cast<std::size_t>(maxSaved)) return;
-    // The names start with the UTC save time, so name order is age order.
-    std::sort(files.begin(), files.end(), [](const fs::path& a, const fs::path& b) { return a.filename() < b.filename(); });
+    // Oldest first: UTC save second, then mission id, then collision suffix (name order would
+    // put "_m10" before "_m9"). Distinct names have distinct keys, so the order is total.
+    std::sort(files.begin(), files.end(), [](const Saved& a, const Saved& b) { return a.stem.key() < b.stem.key(); });
     for (std::size_t i = 0; i + static_cast<std::size_t>(maxSaved) < files.size(); ++i) {
-      const std::string name = utf8(files[i].filename());
-      fs::remove(files[i], ec);  // JSON first: the pair disappears from the index at once
-      fs::remove(dir_ / pathFromUtf8(name.substr(0, name.size() - 5) + kTraceSuffix), ec);
+      const std::string& name = files[i].name;
+      fs::remove(files[i].json, ec);  // JSON first: the pair disappears from the index at once
+      fs::remove(dir_ / pathFromUtf8(name.substr(0, name.size() - kMissionJsonSuffix.size()) + kTraceSuffix), ec);
     }
   } catch (const std::exception&) {
     // Retention is best effort; the next save tries again.
@@ -310,10 +316,28 @@ void MissionArchive::doList() {
       }
       if (ec) error = "cannot list " + utf8(dir_) + ": " + ec.message();
     }
-    std::sort(entries.begin(), entries.end(), [](const MissionIndexEntry& a, const MissionIndexEntry& b) {
-      if (a.savedAtUnix != b.savedAtUnix) return a.savedAtUnix > b.savedAtUnix;
-      return a.path.filename() > b.path.filename();
+    // Newest first: save time, then (within one second) the archive's own name order (id,
+    // collision suffix), then the file name for files named otherwise.
+    struct Keyed {
+      std::int64_t savedAt;
+      std::optional<MissionFileStem> stem;
+      fs::path name;
+      MissionIndexEntry entry;
+    };
+    std::vector<Keyed> keyed;
+    keyed.reserve(entries.size());
+    for (MissionIndexEntry& e : entries) {
+      fs::path name = e.path.filename();
+      keyed.push_back({e.savedAtUnix, parseMissionFileName(utf8(name), kMissionJsonSuffix), std::move(name), std::move(e)});
+    }
+    std::sort(keyed.begin(), keyed.end(), [](const Keyed& a, const Keyed& b) {
+      if (a.savedAt != b.savedAt) return a.savedAt > b.savedAt;
+      if (a.stem.has_value() != b.stem.has_value()) return a.stem.has_value();  // archive names first
+      if (a.stem && a.stem->key() != b.stem->key()) return a.stem->key() > b.stem->key();
+      return a.name > b.name;
     });
+    entries.clear();
+    for (Keyed& k : keyed) entries.push_back(std::move(k.entry));
   } catch (const std::exception& e) {
     error = e.what();
   }
@@ -326,6 +350,11 @@ void MissionArchive::doList() {
 MissionIndex MissionArchive::index() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return index_;
+}
+
+std::size_t MissionArchive::indexSize() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return index_.entries.size();
 }
 
 std::future<LoadedMission> MissionArchive::loadAsync(const MissionIndexEntry& entry) {

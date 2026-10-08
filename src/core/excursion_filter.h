@@ -14,7 +14,7 @@
 // timestamp. Windows are truncated at the start of the stream and at flush(), so an
 // excursion within W of either end is only filtered by the part of the window that exists.
 //
-// Used for the mission statistics and trace (see TelemetryPipeline), never for the live G.
+// Used for the sustained mission statistics (SustainedFilter, MissionFeed), never for the live G.
 #include <cstddef>
 #include <vector>
 
@@ -29,6 +29,7 @@ class RingQueue {
   std::size_t size() const { return count_; }
   T& front() { return buf_[head_]; }
   T& back() { return buf_[(head_ + count_ - 1) & (buf_.size() - 1)]; }
+  const T& at(std::size_t i) const { return buf_[(head_ + i) & (buf_.size() - 1)]; }  // 0 = front
   void push_back(const T& v) {
     if (count_ == buf_.size()) grow();
     buf_[(head_ + count_) & (buf_.size() - 1)] = v;
@@ -83,6 +84,8 @@ class ExcursionFilter {
   void reset();
   // Samples pushed but not yet available to pop().
   std::size_t pending() const { return pending2_.size() + pending4_.size(); }
+  // Samples available to pop().
+  std::size_t ready() const { return out_.size(); }
 
  private:
   // Sliding extremum over a deque of (t, v) kept monotonic in v.

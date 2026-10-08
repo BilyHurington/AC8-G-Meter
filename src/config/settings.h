@@ -18,6 +18,7 @@ enum class MetricId : std::uint8_t {
   CurrentG,
   MaxG,
   MinG,
+  SustainedMaxG,  // hidden by default
   OnsetRate,
   Aoa,
   SustainedHighG,

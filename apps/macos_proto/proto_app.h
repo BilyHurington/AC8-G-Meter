@@ -17,6 +17,7 @@
 #include "sources/replay_source.h"
 #include "sources/simulated_source.h"
 #include "storage/mission_archive.h"
+#include "storage/mission_recorder.h"
 #include "ui/telemetry_ui.h"
 
 namespace ft {
@@ -34,6 +35,7 @@ struct ProtoConfig {
   bool debugPanel = true;
   std::optional<Scenario> scenario;
   double endMissionAtS = -1.0;  // simulated seconds; < 0 = never
+  double velocityNoiseMS = 0.0;  // simulator: gaussian velocity noise per axis (dirty data)
 };
 
 class ProtoApp {
@@ -69,7 +71,10 @@ class ProtoApp {
 
   ProtoConfig config_;
   SettingsStore store_;
-  MissionArchive archive_;  // declared before ui_, which keeps a pointer to it
+  MissionArchive archive_;  // declared before ui_ and missionRecorder_, which keep pointers to it
+  // Saves every finished mission from the pipeline (game thread), independent of UI frames.
+  // Declared before pipeline_, which calls it until destroyed.
+  MissionArchiveRecorder missionRecorder_;
   TelemetryUi ui_;
   TelemetryPipeline pipeline_;
   LatestValue<MetricsSnapshot> latest_;  // pipeline -> UI hand-off (game -> render thread in-game)

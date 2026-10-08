@@ -298,12 +298,28 @@ void printText(const std::string& path, const ReplayResult& r) {
                 r.snapshot.lastReport->aborted ? " (aborted)" : "", m.durationS);
   else
     std::printf("mission  no completed mission (live stats), %.2f s flown\n", m.durationS);
-  std::printf("  G      max %+.2f at %.1f s, min %+.2f at %.1f s\n", m.maxG, m.maxGAtS, m.minG,
+  std::printf("  G      peak max %+.2f at %.1f s, min %+.2f at %.1f s\n", m.maxG, m.maxGAtS, m.minG,
               m.minGAtS);
+  if (m.hasSustainedData)
+    std::printf("         sustained max %+.2f at %.1f s, min %+.2f at %.1f s (excursions < %.2f s removed)\n",
+                m.sustainedMaxG, m.sustainedMaxGAtS, m.sustainedMinG, m.sustainedMinGAtS,
+                r.snapshot.lastReport ? r.snapshot.lastReport->minExcursionS : 0.0);
+  else
+    std::printf("         sustained --\n");
   std::printf("  onset  max %+.1f G/s, min %+.1f G/s\n", m.maxOnset, m.minOnset);
   std::printf("  AoA    max %.1f deg, max speed %.0f m/s\n", m.maxAoaDeg, m.maxSpeed);
-  std::printf("  high-G %d episodes, longest %.2f s, total %.2f s\n", m.highGEpisodes,
+  std::printf("  high-G %d episodes (sustained G), longest %.2f s, total %.2f s\n", m.highGEpisodes,
               m.longestHighGS, m.totalHighGS);
+  if (r.snapshot.lastReport) {
+    std::printf("  avg G  window: max (start) / min (start)\n");
+    for (const WindowedG& w : r.snapshot.lastReport->windowed) {
+      if (w.valid)
+        std::printf("         %4.0f s: %+.2f (%.1f s) / %+.2f (%.1f s)\n", w.windowS, w.maxAvgG, w.maxAvgStartS,
+                    w.minAvgG, w.minAvgStartS);
+      else
+        std::printf("         %4.0f s: -- (longer than the mission)\n", w.windowS);
+    }
+  }
   std::printf("  time in G bins:");
   for (double s : m.timeInGBinS) std::printf(" %.1f", s);
   std::printf(" s\n");
@@ -355,12 +371,28 @@ void printJson(const std::string& path, const ReplayResult& r, bool checked, boo
               escaped.c_str(), r.rows, r.logDurationS, r.hasVelocity ? "true" : "false");
   std::printf("  \"mission\": {\"completed\": %s, \"aborted\": %s, \"duration_s\": %.3f, "
               "\"max_g\": %.4f, \"max_g_at_s\": %.3f, \"min_g\": %.4f, \"min_g_at_s\": %.3f, "
+              "\"has_sustained_data\": %s, \"sustained_max_g\": %.4f, \"sustained_max_g_at_s\": %.3f, "
+              "\"sustained_min_g\": %.4f, \"sustained_min_g_at_s\": %.3f, "
               "\"max_onset\": %.4f, \"min_onset\": %.4f, \"max_aoa_deg\": %.4f, \"max_speed\": %.3f, "
-              "\"high_g_episodes\": %d, \"longest_high_g_s\": %.3f, \"total_high_g_s\": %.3f},\n",
+              "\"high_g_episodes\": %d, \"longest_high_g_s\": %.3f, \"total_high_g_s\": %.3f",
               r.snapshot.lastReport ? "true" : "false",
               r.snapshot.lastReport && r.snapshot.lastReport->aborted ? "true" : "false", m.durationS,
-              m.maxG, m.maxGAtS, m.minG, m.minGAtS, m.maxOnset, m.minOnset, m.maxAoaDeg, m.maxSpeed,
-              m.highGEpisodes, m.longestHighGS, m.totalHighGS);
+              m.maxG, m.maxGAtS, m.minG, m.minGAtS, m.hasSustainedData ? "true" : "false", m.sustainedMaxG,
+              m.sustainedMaxGAtS, m.sustainedMinG, m.sustainedMinGAtS, m.maxOnset, m.minOnset, m.maxAoaDeg,
+              m.maxSpeed, m.highGEpisodes, m.longestHighGS, m.totalHighGS);
+  std::printf(", \"average_g_windows\": [");
+  if (r.snapshot.lastReport) {
+    const auto& ws = r.snapshot.lastReport->windowed;
+    for (std::size_t i = 0; i < ws.size(); ++i) {
+      const WindowedG& w = ws[i];
+      std::printf("%s{\"window_s\": %g, \"valid\": %s", i ? ", " : "", w.windowS, w.valid ? "true" : "false");
+      if (w.valid)
+        std::printf(", \"max_avg_g\": %.4f, \"max_avg_start_s\": %.3f, \"min_avg_g\": %.4f, \"min_avg_start_s\": %.3f",
+                    w.maxAvgG, w.maxAvgStartS, w.minAvgG, w.minAvgStartS);
+      std::printf("}");
+    }
+  }
+  std::printf("]},\n");
   std::printf("  \"quality\": {\"accepted\": %llu, \"extreme_g\": %llu, \"rejected_non_finite\": %llu, "
               "\"rejected_time\": %llu, \"rejected_spike\": %llu, \"resets_gap\": %llu, "
               "\"resets_teleport\": %llu, \"resets_jump\": %llu},\n",

@@ -174,9 +174,9 @@ struct RecordingConsumer : IMetricsConsumer {
     last = m;
   }
   void onMissionStarted() override { ++started; }
-  void onMissionEnded(const MissionReport& r) override {
+  void onMissionEnded(const std::shared_ptr<const MissionReport>& r) override {
     ++ended;
-    lastReportId = r.id;
+    lastReportId = r->id;
   }
   void onReset() override { ++resets; }
 };

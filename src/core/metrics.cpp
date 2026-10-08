@@ -25,6 +25,7 @@ void MissionTrace::push(const TracePoint& p) {
   gMean.push_back(p.gMean);
   gMin.push_back(p.gMin);
   gMax.push_back(p.gMax);
+  gSustained.push_back(p.gSustained);
   onset.push_back(p.onset);
   aoaDeg.push_back(p.aoaDeg);
   speed.push_back(p.speed);
@@ -33,11 +34,11 @@ void MissionTrace::push(const TracePoint& p) {
 }
 
 TracePoint MissionTrace::at(std::size_t i) const {
-  return {gMean[i], gMin[i], gMax[i], onset[i], aoaDeg[i], speed[i], altitude[i], highG[i] != 0};
+  return {gMean[i], gMin[i], gMax[i], gSustained[i], onset[i], aoaDeg[i], speed[i], altitude[i], highG[i] != 0};
 }
 
 void MissionTrace::clear() {
-  for (auto* column : {&gMean, &gMin, &gMax, &onset, &aoaDeg, &speed, &altitude}) column->clear();
+  for (auto* column : {&gMean, &gMin, &gMax, &gSustained, &onset, &aoaDeg, &speed, &altitude}) column->clear();
   highG.clear();
 }
 
