@@ -92,9 +92,11 @@ void timeline(const MissionReport& report, float highGEnter) {
   const float y1 = yFor(1.0f);
   dl->AddLine(ImVec2(mn.x, y1), ImVec2(mx.x, y1), ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.5f));
 
-  const double durationS = static_cast<double>(g.size() - 1) / report.timelineHz;
-  ImGui::TextDisabled("00:00");
-  const std::string end = formatClock(durationS);
+  // The timeline starts at timelineStartS (non-zero after a mid-mission G mode change).
+  const double startS = report.timelineStartS;
+  const double endS = startS + static_cast<double>(g.size() - 1) / report.timelineHz;
+  ImGui::TextDisabled("%s", formatClock(startS).c_str());
+  const std::string end = formatClock(endS);
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(end.c_str()).x);
   ImGui::TextDisabled("%s", end.c_str());
 }

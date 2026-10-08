@@ -45,14 +45,14 @@ TEST_CASE("sustained high-G episodes: G hovering between exit and enter does not
   RecordingConsumer c;
   p.addConsumer(&c);
   const double t1 = fly(p, prof.trajectory(), 0.0, 4.0);
-  // G crosses 6.0 at t = 1.45; the filtered value follows ~0.2 s later (LS window,
-  // median and EMA lag), so the episode clock starts at ~1.65 s.
+  // G crosses 6.0 at t = 1.45; the filtered value follows ~0.13 s later (LS window,
+  // median and EMA lag), so the episode clock starts at ~1.58 s.
   CHECK(c.last.inHighG);
-  CHECK(c.last.highGDurationS == Approx(4.0 - 1.65).epsilon(0.03));
+  CHECK(c.last.highGDurationS == Approx(4.0 - 1.58).epsilon(0.01));
   fly(p, prof.trajectory(), t1, 9.0);
   const MissionStats& s = p.snapshot().mission;
   CHECK(s.highGEpisodes == 1);
-  CHECK(s.longestHighGS == Approx(6.0 - 1.65).epsilon(0.03));
+  CHECK(s.longestHighGS == Approx(6.0 - 1.58).epsilon(0.01));
   CHECK(s.totalHighGS == Approx(s.longestHighGS).epsilon(1e-6));
   CHECK_FALSE(c.last.inHighG);
   CHECK(c.last.highGDurationS == 0.0);
@@ -141,8 +141,10 @@ TEST_CASE("consumer callbacks follow phases") {
   CHECK(c.metricsActive == 30);
   CHECK(c.started == 1);
   t = fly(p, levelFlight(), t, 1.5, phase(MissionPhase::Paused));
+  CHECK(c.metrics == 60);  // nothing while Paused
   t = fly(p, levelFlight(), t, 2.0, phase(MissionPhase::Ended));
-  CHECK(c.metrics == 60);  // nothing while Paused or Ended
+  CHECK(c.metricsEnded == 30);  // results screen keeps updating (effects can fade out)
+  CHECK(c.metrics == 90);
   CHECK(c.ended == 1);
   CHECK(removed.metrics + removed.started + removed.ended == 0);
 
@@ -190,4 +192,38 @@ TEST_CASE("recent history is decimated by time, not by sample count") {
     CHECK(std::abs(h.count - 40) <= 2);
     CHECK(h.at(h.count - 1) == Approx(1.0f));
   }
+}
+
+TEST_CASE("changing the G mode mid-mission restarts the G statistics only") {
+  // Inverted level flight: Nz = -1, |n| = +1. Mixing them would give min -1 / max +1.
+  const Trajectory inverted = levelFlight(Basis::fromUERotator(0, 0, 180));
+  TelemetryPipeline p;
+  double t = fly(p, inverted, 0.0, 2.0);
+  MissionStats s = p.snapshot().mission;
+  CHECK(s.minG == Approx(-1.0).epsilon(1e-6));
+  CHECK(s.timeInGBinS[gBinIndex(-1.0)] > 1.9);
+
+  PipelineConfig cfg = p.config();
+  cfg.gMode = GMode::Total;
+  p.setConfig(cfg);
+  CHECK(p.snapshot().recent.count == 0);
+  t = fly(p, inverted, t, 4.0);
+  fly(p, inverted, t, 4.5, phase(MissionPhase::Ended));
+
+  REQUIRE(p.snapshot().lastReport);
+  const MissionReport& r = *p.snapshot().lastReport;
+  s = r.stats;
+  CHECK(s.minG == Approx(1.0).epsilon(1e-6));
+  CHECK(s.maxG == Approx(1.0).epsilon(1e-6));
+  CHECK(s.minGAtS > r.timelineStartS);
+  CHECK(s.timeInGBinS[gBinIndex(-1.0)] == 0.0);
+  CHECK(s.timeInGBinS[gBinIndex(1.0)] == Approx(2.0).epsilon(0.05));
+  // Kept: flight time, speed, sample counts.
+  CHECK(s.durationS == Approx(4.0).epsilon(0.03));
+  CHECK(s.maxSpeed == Approx(kSpeed));
+  CHECK(s.acceptedSamples == 240);
+  // The timeline restarts where the mode changed.
+  CHECK(r.timelineStartS == Approx(2.0).epsilon(0.03));
+  CHECK(std::abs(static_cast<double>(r.gTimeline.size()) - (s.durationS - r.timelineStartS) * 10.0) <= 2.0);
+  CHECK(r.gTimeline.front() == Approx(1.0f));
 }

@@ -65,6 +65,9 @@ struct MissionReport {
   MissionStats stats;
   double timelineHz = 10.0;
   std::vector<float> gTimeline;    // `g` resampled at timelineHz across the mission
+  // Mission time of gTimeline[0]. 0 unless the G mode changed mid-mission, which restarts
+  // the timeline (and the other G statistics) at that point.
+  double timelineStartS = 0.0;
 };
 
 // Fixed-size ring of recent `g` values at a fixed rate (sparklines, future physiology).

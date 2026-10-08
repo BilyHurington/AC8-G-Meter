@@ -2,6 +2,8 @@
 #include <doctest/doctest.h>
 
 #include <limits>
+#include <numeric>
+#include <random>
 #include <string>
 
 #include "flight_helpers.h"
@@ -177,4 +179,92 @@ TEST_CASE("resuming from pause restarts the differentiators") {
   CHECK(s.quality.rejectedImplausible == 0);
   CHECK(s.quality.resetsGap == 0);
   CHECK(s.current.speed == Approx(kSpeed + 40.0));
+}
+
+TEST_CASE("implausible G holds the last values but keeps mission time") {
+  // 1 s beyond plausibleGLimit (15 G) inside a 5 s mission, reached by a 30 G/s ramp
+  // that is smooth enough to pass the spike gate.
+  GProfile prof([](double t) {
+    if (t < 1.5) return 1.0;
+    if (t < 2.0) return 1.0 + 30.0 * (t - 1.5);
+    if (t < 3.0) return 16.0;
+    if (t < 3.5) return 16.0 - 30.0 * (t - 3.0);
+    return 1.0;
+  });
+  TelemetryPipeline p;
+  RecordingConsumer c;
+  p.addConsumer(&c);
+  double maxShown = 0.0;
+  bool validThroughout = true;
+  for (double t = 0.0; t < 5.0 - 1e-9; t += 1.0 / 60.0) {
+    p.push(sampleAt(prof.trajectory(), t));
+    maxShown = std::max(maxShown, c.last.g);
+    if (t > 0.2) validThroughout = validThroughout && c.last.valid;
+  }
+  const MetricsSnapshot s = p.snapshot();
+  CHECK(s.quality.rejectedImplausible > 30);
+  CHECK(s.mission.rejectedSamples == s.quality.rejectedImplausible);
+  CHECK(validThroughout);              // held values, never "--"
+  CHECK(maxShown < 15.0);
+  CHECK(s.mission.maxG == Approx(maxShown));
+  CHECK(s.mission.durationS == Approx(5.0).epsilon(0.02));  // only warm-up samples missing
+  const double binSum = std::accumulate(s.mission.timeInGBinS.begin(), s.mission.timeInGBinS.end(), 0.0);
+  CHECK(binSum == Approx(s.mission.durationS));
+  CHECK(s.mission.totalHighGS > 1.2);  // the held (high) value keeps the high-G clock running
+}
+
+TEST_CASE("position-only input with centimetre noise: no false spikes, accurate G") {
+  // Deterministic noise without std distributions (their output is implementation-defined):
+  // uniform in [-a, a] with a = sqrt(3) * sigma has standard deviation sigma.
+  const double sigma = 0.01;
+  std::mt19937 rng(2024);
+  auto noise = [&] {
+    return (static_cast<double>(rng()) / 4294967295.0 * 2.0 - 1.0) * std::sqrt(3.0) * sigma;
+  };
+  const double nz = 6.0;
+  const Trajectory turn = levelTurn(std::acos(1.0 / nz) * kRadToDeg);
+  FlyOptions o;
+  o.positionOnly = true;
+  for (double fps : {60.0, 144.0}) {
+    CAPTURE(fps);
+    TelemetryPipeline p;
+    RecordingConsumer c;
+    p.addConsumer(&c);
+    double sumSq = 0.0, maxErr = 0.0;
+    int n = 0;
+    for (int i = 0; i < static_cast<int>(10.0 * fps); ++i) {
+      RawFlightSample smp = sampleAt(turn, i / fps, o);
+      smp.position += Vec3{noise(), noise(), noise()};
+      p.push(smp);
+      if (smp.t < 1.0) continue;
+      const double err = c.last.g - nz;
+      sumSq += err * err;
+      maxErr = std::max(maxErr, std::abs(err));
+      ++n;
+    }
+    const MetricsSnapshot s = p.snapshot();
+    CHECK(s.quality.rejectedImplausible == 0);
+    CHECK(s.quality.resetsTeleport == 0);
+    // Measured: rms 0.12 / 0.10 G, max 0.50 / 0.28 G at 60 / 144 fps.
+    CHECK(std::sqrt(sumSq / n) < 0.16);
+    CHECK(maxErr < 0.7);
+    CHECK(s.mission.maxG < nz + 0.7);
+  }
+}
+
+TEST_CASE("position-only teleport is measured against the fit prediction") {
+  // 60 m sideways: well within what the old speed-based check (1500 m/s * dt + 50 m)
+  // accepted, but no aircraft moves 60 m off its path in one frame.
+  TelemetryPipeline p;
+  FlyOptions o;
+  o.positionOnly = true;
+  fly(p, levelFlight(), 0.0, 1.0, o);
+  auto moved = [](double t) {
+    return State{{kSpeed * t, 60.0, 3000.0}, {kSpeed, 0.0, 0.0}, Basis{}};
+  };
+  fly(p, moved, 1.0, 2.0, o);
+  const MetricsSnapshot s = p.snapshot();
+  CHECK(s.quality.resetsTeleport == 1);
+  CHECK(s.quality.rejectedImplausible == 0);
+  CHECK(s.mission.maxG == Approx(1.0).epsilon(1e-6));
 }

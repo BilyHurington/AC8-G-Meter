@@ -27,11 +27,15 @@ namespace {
 
 using namespace ft;
 
-// --check thresholds. A log may loosen them with a comment line such as
-//   # check: g_rms<=0.35 aoa_rms<=1.5
-constexpr double kDefaultGRmsLimit = 0.15;    // G
+// --check thresholds. A log may override them with a comment line such as
+//   # check: g_rms<=0.35 g_rms0<=0.8 aoa_rms<=1.5 latency_ms<=180
+constexpr double kDefaultGRmsLimit = 0.15;    // G, after removing the estimator delay
+// G error as displayed (no delay compensation): what the pilot actually sees, so it also
+// catches latency regressions. Set ~25% above the worst default-config replay log
+// (dogfight_mix 0.54 G; the error is dominated by the ~105 ms delay in fast manoeuvres).
+constexpr double kDefaultGRms0Limit = 0.70;   // G
 constexpr double kDefaultAoaRmsLimit = 0.5;   // deg
-constexpr double kMaxLatencyS = 0.25;         // estimator delay beyond this fails the check
+constexpr double kMaxLatencyS = 0.12;         // estimator delay beyond this fails the check
 // Estimators restart after a gap / teleport / pause; their warm-up is not "error".
 constexpr double kSettleAfterResetS = 0.5;
 constexpr double kMaxLagSearchS = 0.3;
@@ -111,6 +115,9 @@ int generate(const std::string& scenarioArg, double duration, const std::string&
   if (dirty) {
     rec.writeComment("dirty: noise, frame jitter, drops, duplicates, 1 spike, 1 hitch, 1 teleport");
     rec.writeComment("check: g_rms<=0.35 aoa_rms<=1.5");
+  } else if (noVelocity) {
+    // Position-only input uses the longer accelWindowPositionOnlyS (+~35 ms delay).
+    rec.writeComment("check: latency_ms<=180");
   }
   for (std::size_t i = 0; i < samples.size(); ++i)
     rec.write({samples[i], truth[i].trueNz, truth[i].trueAoaDeg});
@@ -125,7 +132,9 @@ int generate(const std::string& scenarioArg, double duration, const std::string&
 
 struct CheckLimits {
   double gRms = kDefaultGRmsLimit;
+  double gRms0 = kDefaultGRms0Limit;
   double aoaRms = kDefaultAoaRmsLimit;
+  double latencyS = kMaxLatencyS;
 };
 
 // Reads "# check: key<=value ..." directives from comment lines.
@@ -146,7 +155,9 @@ CheckLimits readCheckDirectives(const std::string& path) {
       if (le == std::string::npos || !parseDouble(token.c_str() + le + 2, v)) continue;
       const std::string key = token.substr(0, le);
       if (key == "g_rms") limits.gRms = v;
+      else if (key == "g_rms0") limits.gRms0 = v;
       else if (key == "aoa_rms") limits.aoaRms = v;
+      else if (key == "latency_ms") limits.latencyS = v / 1000.0;
     }
   }
   return limits;
@@ -295,7 +306,7 @@ void printText(const std::string& path, const ReplayResult& r) {
               static_cast<unsigned long long>(q.resetsGap),
               static_cast<unsigned long long>(q.resetsTeleport));
   auto err = [](const char* name, const char* unit, const ErrorStats& e) {
-    std::printf("  %-4s   n=%zu  rms %.3f %s, max %.3f  |  aligned (lag %3.0f ms): rms %.3f, max %.3f\n",
+    std::printf("  %-4s   n=%zu  zero-lag rms %.3f %s, max %.3f  |  aligned (lag %3.0f ms): rms %.3f, max %.3f\n",
                 name, e.count, e.rms, unit, e.maxAbs, e.lagS * 1000.0, e.lagRms, e.lagMaxAbs);
   };
   if (r.hasTruthNz || r.hasTruthAoa) {
@@ -350,29 +361,38 @@ bool runCheck(const ReplayResult& r, const CheckLimits& limits, bool quiet) {
     std::fprintf(stderr, "CHECK FAILED: %s\n", msg.c_str());
     pass = false;
   };
-  auto checkSeries = [&](const char* name, const ErrorStats& e, double limit, const char* unit) {
+  // zeroLagLimit < 0: no limit on the unaligned error.
+  auto checkSeries = [&](const char* name, const ErrorStats& e, double limit, double zeroLagLimit,
+                         const char* unit) {
     char buf[200];
     if (e.count == 0) {
       std::snprintf(buf, sizeof buf, "%s: no valid samples to compare", name);
       return fail(buf);
     }
     if (e.lagRms > limit) {
-      std::snprintf(buf, sizeof buf, "%s rms error %.3f %s > %.3f", name, e.lagRms, unit, limit);
+      std::snprintf(buf, sizeof buf, "%s aligned rms error %.3f %s > %.3f", name, e.lagRms, unit, limit);
       fail(buf);
     }
-    if (e.lagS > kMaxLatencyS) {
+    if (zeroLagLimit >= 0.0 && e.rms > zeroLagLimit) {
+      std::snprintf(buf, sizeof buf, "%s zero-lag rms error %.3f %s > %.3f", name, e.rms, unit,
+                    zeroLagLimit);
+      fail(buf);
+    }
+    if (e.lagS > limits.latencyS + 1e-9) {
       std::snprintf(buf, sizeof buf, "%s latency %.0f ms > %.0f ms", name, e.lagS * 1000.0,
-                    kMaxLatencyS * 1000.0);
+                    limits.latencyS * 1000.0);
       fail(buf);
     }
   };
   if (!r.snapshot.lastReport) fail("log produced no mission report");
-  if (r.hasTruthNz) checkSeries("Nz", r.g, limits.gRms, "G");
-  if (r.hasTruthAoa) checkSeries("AoA", r.aoa, limits.aoaRms, "deg");
+  if (r.hasTruthNz) checkSeries("Nz", r.g, limits.gRms, limits.gRms0, "G");
+  if (r.hasTruthAoa) checkSeries("AoA", r.aoa, limits.aoaRms, -1.0, "deg");
   if (!quiet) {
     if (!r.hasTruthNz && !r.hasTruthAoa) std::printf("check    no ground truth in log, error check skipped\n");
-    std::printf("check    %s (limits: Nz rms <= %.2f G, AoA rms <= %.2f deg, latency <= %.0f ms)\n",
-                pass ? "PASS" : "FAIL", limits.gRms, limits.aoaRms, kMaxLatencyS * 1000.0);
+    std::printf("check    %s (limits: Nz rms <= %.2f G zero-lag, <= %.2f G aligned; AoA rms <= %.2f deg; "
+                "latency <= %.0f ms)\n",
+                pass ? "PASS" : "FAIL", limits.gRms0, limits.gRms, limits.aoaRms,
+                limits.latencyS * 1000.0);
   }
   return pass;
 }

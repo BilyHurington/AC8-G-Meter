@@ -157,6 +157,15 @@ TEST_CASE("KinematicsEstimator: velocity slope and position quadratic fit") {
   checkVecAbs(fromVel.acceleration(), a, 1e-6);
   checkVecAbs(fromPos.acceleration(), a, 1e-3);
   checkVecAbs(fromPos.velocity(), fromVel.velocity(), 1e-3);
+  // Position fit: exact data -> no residual noise, and it extrapolates the parabola.
+  CHECK(fromPos.fitResidualSigma() < 1e-6);
+  const double tNext = t + 0.01, sNext = tNext - 50.0;
+  REQUIRE(fromPos.predictPosition(tNext));
+  checkVecAbs(*fromPos.predictPosition(tNext), p0 + v0 * sNext + a * (0.5 * sNext * sNext), 1e-4);
+  CHECK_FALSE(fromVel.predictPosition(tNext));  // velocity input has no position fit
+  // Both refer their acceleration to the window's mean sample time.
+  CHECK(fromVel.accelerationTime() < t - 0.02);
+  CHECK(fromPos.accelerationTime() < t - 0.05);
 
   KinematicsEstimator e;
   e.add(0.0, {}, Vec3{});

@@ -12,7 +12,23 @@ void MissionTracker::start(double timelineHz) {
 
 void MissionTracker::clearStats() {
   stats_ = {};
+  hasG_ = false;
   timeline_.clear();
+  timelineStartS_ = 0.0;
+}
+
+void MissionTracker::resetGStats() {
+  const MissionStats old = stats_;
+  stats_ = {};
+  stats_.hasData = old.hasData;
+  stats_.durationS = old.durationS;
+  stats_.maxAoaDeg = old.maxAoaDeg;
+  stats_.maxSpeed = old.maxSpeed;
+  stats_.acceptedSamples = old.acceptedSamples;
+  stats_.rejectedSamples = old.rejectedSamples;
+  hasG_ = false;
+  timeline_.clear();
+  timelineStartS_ = old.durationS;
 }
 
 void MissionTracker::add(const FlightMetrics& m, double dtS, bool highGEntered) {
@@ -20,8 +36,9 @@ void MissionTracker::add(const FlightMetrics& m, double dtS, bool highGEntered) 
   s.durationS += dtS;
   const double now = s.durationS;
 
-  if (!s.hasData) {
-    s.hasData = true;
+  s.hasData = true;
+  if (!hasG_) {
+    hasG_ = true;
     s.maxG = s.minG = m.g;
     s.maxGAtS = s.minGAtS = now;
     s.maxOnset = s.minOnset = m.onsetRate;
@@ -47,7 +64,7 @@ void MissionTracker::add(const FlightMetrics& m, double dtS, bool highGEntered) 
 
   // Sample-and-hold resampling onto a fixed grid of mission time.
   if (timelineHz_ > 0.0) {
-    while (static_cast<double>(timeline_.size()) / timelineHz_ <= now + 1e-9 &&
+    while (timelineStartS_ + static_cast<double>(timeline_.size()) / timelineHz_ <= now + 1e-9 &&
            timeline_.size() < kMaxTimelinePoints) {
       timeline_.push_back(static_cast<float>(m.g));
     }
@@ -61,6 +78,7 @@ MissionReport MissionTracker::finish(bool aborted) {
   r.aborted = aborted;
   r.stats = stats_;
   r.timelineHz = timelineHz_;
+  r.timelineStartS = timelineStartS_;
   r.gTimeline = timeline_;
   return r;
 }

@@ -19,10 +19,17 @@ constexpr int kMinOnsetPoints = 3;
 // A jump that persists for this many samples is a real state change (respawn, mission
 // restart), not a glitch: accept it and restart the estimators.
 constexpr int kMaxConsecutiveSpikes = 3;
+// Position-only spike gate: a new position further than this from the fit's prediction is
+// a glitch. The noise term adapts to the input's jitter; the floor covers what the
+// quadratic extrapolation cannot follow in hard manoeuvres (worst seen on clean simulated
+// dogfights: 0.02 m at 60 fps, 0.4 m at 10 fps).
+constexpr double kPositionGateSigmas = 8.0;
+constexpr double kPositionGateFloorM = 1.0;
 
 bool needsFilterReset(const PipelineConfig& a, const PipelineConfig& b) {
-  return a.accelWindowS != b.accelWindowS || a.onsetWindowS != b.onsetWindowS ||
-         a.medianWindow != b.medianWindow || a.gMode != b.gMode;
+  return a.accelWindowS != b.accelWindowS ||
+         a.accelWindowPositionOnlyS != b.accelWindowPositionOnlyS ||
+         a.onsetWindowS != b.onsetWindowS || a.medianWindow != b.medianWindow || a.gMode != b.gMode;
 }
 
 }  // namespace
@@ -33,8 +40,8 @@ struct TelemetryPipeline::Impl {
 
   // Estimators: everything here restarts on a gap, teleport, pause or resize.
   KinematicsEstimator kinematics;
-  Smoother gSmooth;
-  std::array<Smoother, 3> bodySmooth;  // Nx, Ny, Nz
+  TimedWindow<Basis> attitudes;        // attitude history spanning the kinematics window
+  std::array<Smoother, 3> bodySmooth;  // Nx, Ny, Nz; `g` is derived from these
   TimedWindow<double> onsetWindow;
 
   HighGTimer highG;
@@ -61,23 +68,30 @@ struct TelemetryPipeline::Impl {
   }
 
   void applyConfig(bool resize) {
-    kinematics.setWindow(cfg.accelWindowS);
+    kinematics.setWindows(cfg.accelWindowS, cfg.accelWindowPositionOnlyS);
     highG.setThresholds(cfg.highGEnter, cfg.highGExit);
     if (resize) {
-      gSmooth.configure(cfg.medianWindow, cfg.smoothingTauS);
       for (Smoother& s : bodySmooth) s.configure(cfg.medianWindow, cfg.smoothingTauS);
       resetEstimators();
     } else {
-      gSmooth.setTau(cfg.smoothingTauS);
       for (Smoother& s : bodySmooth) s.setTau(cfg.smoothingTauS);
     }
   }
 
   void resetEstimators() {
     kinematics.reset();
-    gSmooth.reset();
+    attitudes.reset();
     for (Smoother& s : bodySmooth) s.reset();
     onsetWindow.reset();
+  }
+
+  // G mode changed: old and new `g` values are different quantities and must not share
+  // extremes, histogram, high-G episodes or history.
+  void resetGStats() {
+    if (mission.open()) mission.resetGStats();
+    highG.reset();
+    recent.clear();
+    recentAccumS = 1.0 / recent.sampleHz;
   }
 
   // Discontinuity in the aircraft state (teleport, respawn): estimators and the current
@@ -131,19 +145,60 @@ struct TelemetryPipeline::Impl {
     if (phase == MissionPhase::Active) mission.countRejected();
   }
 
-  // Spike gate. The acceleration estimate is a least-squares slope over ~accelWindowS,
-  // so a single bad velocity/position sample would bias every estimate for as long as it
-  // stays in the window: a burst of plausible-looking garbage several samples long that
-  // neither the median filter (it only removes isolated outliers) nor the post-hoc
-  // |G| limit can catch. Instead, check the acceleration implied by the single step from
-  // the last accepted sample against the current trend *before* the sample enters the
-  // window. A deviation beyond plausibleGLimit cannot be flown, so the sample is dropped.
+  // Spike gate. The acceleration estimate is a least-squares fit over the kinematics
+  // window, so a single bad velocity/position sample would bias every estimate for as
+  // long as it stays in the window: a burst of plausible-looking garbage several samples
+  // long that neither the median filter (it only removes isolated outliers) nor the
+  // post-hoc |G| limit can catch. So each sample is checked *before* it enters the window:
+  //   velocity input: the acceleration implied by the single step from the last sample,
+  //     against the current trend. A deviation beyond plausibleGLimit cannot be flown.
+  //   position only : the distance from where the window's quadratic fit predicts the
+  //     aircraft, against a threshold scaled to the fit's residual noise. (A two-point
+  //     second difference would amplify position noise by ~4 / dt^2: 1 cm of jitter
+  //     reads as ~15 G at 60 fps.)
   // The median filter then handles smaller isolated outliers in the G signal.
   bool isSpike(const RawFlightSample& s) const {
-    const std::optional<Vec3> step = kinematics.stepAcceleration(s.t, s.position, s.velocity);
+    if (!s.velocity) {
+      const std::optional<Vec3> predicted = kinematics.predictPosition(s.t);
+      if (!predicted) return false;
+      const double limit =
+          std::max(kPositionGateSigmas * kinematics.fitResidualSigma(), kPositionGateFloorM);
+      return length(s.position - *predicted) > limit;
+    }
+    const std::optional<Vec3> step = kinematics.stepAcceleration(s.t, s.velocity);
     if (!step) return false;
     const Vec3 trend = kinematics.hasAcceleration() ? kinematics.acceleration() : Vec3{};
     return length(*step - trend) / kG0 > cfg.plausibleGLimit;
+  }
+
+  // Position jump inconsistent with the motion (respawn, checkpoint). Position-only input
+  // is measured against the same fit prediction as the spike gate.
+  bool isTeleport(const RawFlightSample& s, double dt) const {
+    if (!s.velocity) {
+      if (const std::optional<Vec3> predicted = kinematics.predictPosition(s.t))
+        return length(s.position - *predicted) > cfg.teleportToleranceM;
+    }
+    return ft::isTeleport(lastPos, lastVel, s, dt, cfg.teleportToleranceM);
+  }
+
+  // Attitude at time t, interpolated between the two history samples around it. The
+  // acceleration is a window average that refers to ~windowS / 2 ago; projecting it on
+  // the newest attitude would turn every roll into spurious side force (Ny). Linear
+  // interpolation of the axes + re-orthonormalisation is plenty for frame-to-frame
+  // rotations; if the step is too large for that, the nearer sample is used.
+  Basis attitudeAt(double t) const {
+    const int n = attitudes.size();
+    if (n == 1) return attitudes.value(0);
+    int i = 1;
+    while (i < n - 1 && attitudes.time(i) < t) ++i;
+    const double t0 = attitudes.time(i - 1), t1 = attitudes.time(i);
+    const double w = std::clamp((t - t0) / (t1 - t0), 0.0, 1.0);
+    const Basis& a = attitudes.value(i - 1);
+    const Basis& b = attitudes.value(i);
+    Basis lerp{a.forward + (b.forward - a.forward) * w, a.right + (b.right - a.right) * w,
+               a.up + (b.up - a.up) * w};
+    if (!sanitizeAttitude(lerp)) return w < 0.5 ? a : b;
+    return lerp;
   }
 
   void push(const RawFlightSample& raw) {
@@ -171,7 +226,7 @@ struct TelemetryPipeline::Impl {
       if (dt > cfg.maxGapS || clockRestart) {
         resetEstimators();
         ++quality.resetsGap;
-      } else if (isTeleport(lastPos, lastVel, s, dt, cfg.teleportToleranceM)) {
+      } else if (isTeleport(s, dt)) {
         discontinuity();
         ++quality.resetsTeleport;
       } else if (isSpike(s)) {
@@ -188,6 +243,8 @@ struct TelemetryPipeline::Impl {
     const double stepDt = std::max(dt, 0.0);  // negative only on a clock restart
 
     kinematics.add(s.t, s.position, s.velocity);
+    attitudes.push(s.t, s.attitude);
+    attitudes.trim(kinematics.windowS(), KinematicsEstimator::kMinPoints);
     hasLast = true;
     lastT = s.t;
     lastPos = s.position;
@@ -202,43 +259,48 @@ struct TelemetryPipeline::Impl {
     computeAirData(s, m);
 
     HighGTimer::Step highGStep;
+    bool implausible = false;
     if (kinematics.hasAcceleration()) {
       // Load factor = specific force in G: what an accelerometer in the seat measures.
+      // Projected on the attitude at the instant the acceleration estimate refers to.
       const Vec3 n = (kinematics.acceleration() - kGravityWorld) / kG0;
-      const Vec3 nBody = s.attitude.toBody(n);
-      const double gRaw = cfg.gMode == GMode::Nz ? nBody.z : length(nBody);
-      if (std::abs(gRaw) > cfg.plausibleGLimit) {
+      const Vec3 nBody = attitudeAt(kinematics.accelerationTime()).toBody(n);
+      implausible = length(nBody) > cfg.plausibleGLimit;
+      if (implausible) {
+        // Glitch that got past the spike gate: keep it out of the smoothers and hold the
+        // last filtered values, but still account the sample's time (mission duration,
+        // histogram, high-G clock) so a glitch burst does not shorten the mission.
         reject(&DataQuality::rejectedImplausible);
-        return;
-      }
-      m.gRaw = gRaw;
-      m.g = gSmooth.update(gRaw, stepDt);
-      m.loadFactorBody = {bodySmooth[0].update(nBody.x, stepDt),
-                          bodySmooth[1].update(nBody.y, stepDt),
-                          bodySmooth[2].update(nBody.z, stepDt)};
-      m.gTotal = length(m.loadFactorBody);
+        m.valid = onsetWindow.size() >= kMinOnsetPoints;
+      } else {
+        m.gRaw = cfg.gMode == GMode::Nz ? nBody.z : length(nBody);
+        m.loadFactorBody = {bodySmooth[0].update(nBody.x, stepDt),
+                            bodySmooth[1].update(nBody.y, stepDt),
+                            bodySmooth[2].update(nBody.z, stepDt)};
+        m.gTotal = length(m.loadFactorBody);
+        m.g = cfg.gMode == GMode::Nz ? m.loadFactorBody.z : m.gTotal;
 
-      onsetWindow.push(s.t, m.g);
-      onsetWindow.trim(cfg.onsetWindowS, kMinOnsetPoints);
-      m.onsetRate = onsetWindow.slope();
-      m.valid = onsetWindow.size() >= kMinOnsetPoints;
+        onsetWindow.push(s.t, m.g);
+        onsetWindow.trim(cfg.onsetWindowS, kMinOnsetPoints);
+        m.onsetRate = onsetWindow.slope();
+        m.valid = onsetWindow.size() >= kMinOnsetPoints;
+      }
     }
 
     if (m.valid) highGStep = highG.update(m.g, stepDt);
     m.inHighG = highG.active();
     m.highGDurationS = highG.durationS();
 
-    ++quality.accepted;
+    if (!implausible) ++quality.accepted;
     if (phase == MissionPhase::Active) {
-      mission.countAccepted();
+      if (!implausible) mission.countAccepted();
       if (m.valid) mission.add(m, stepDt, highGStep.entered);
     }
     if (m.valid) recordRecent(m.g, stepDt);
     current = m;
 
-    if (phase == MissionPhase::Active || phase == MissionPhase::None) {
-      for (std::size_t i = 0; i < consumers.size(); ++i) consumers[i]->onMetrics(m, phase);
-    }
+    // Every phase but Paused (which returned above).
+    for (std::size_t i = 0; i < consumers.size(); ++i) consumers[i]->onMetrics(m, phase);
   }
 
   void computeAirData(const RawFlightSample& s, FlightMetrics& m) const {
@@ -290,8 +352,10 @@ TelemetryPipeline::~TelemetryPipeline() = default;
 
 void TelemetryPipeline::setConfig(const PipelineConfig& config) {
   const bool resize = needsFilterReset(impl_->cfg, config);
+  const bool gModeChanged = config.gMode != impl_->cfg.gMode;
   impl_->cfg = config;
   impl_->applyConfig(resize);
+  if (gModeChanged) impl_->resetGStats();
 }
 
 const PipelineConfig& TelemetryPipeline::config() const { return impl_->cfg; }

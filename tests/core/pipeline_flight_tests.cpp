@@ -178,3 +178,68 @@ TEST_CASE("AoA is invalid below minSpeedForAoa and never enters mission max") {
   CHECK_FALSE(s.current.aoaValid);
   CHECK(s.mission.maxAoaDeg == 0.0);
 }
+
+TEST_CASE("rolling pull: acceleration is projected on the attitude of its own instant") {
+  // The acceleration estimate refers to the middle of the kinematics window (~40 ms ago);
+  // projected on the newest attitude, a 180 deg/s roll at 5 G would read ~0.6 G of side
+  // force that is not there.
+  const double nG = 5.0, rollRate = kPi;
+  const Trajectory traj = rollingPull(nG, rollRate);
+  for (bool positionOnly : {false, true}) {
+    CAPTURE(positionOnly);
+    FlyOptions o;
+    o.positionOnly = positionOnly;
+    TelemetryPipeline p;
+    RecordingConsumer c;
+    p.addConsumer(&c);
+    double sumNy2 = 0.0;
+    int n = 0;
+    for (double t = 0.0; t < 3.0; t += 1.0 / 60.0) {
+      p.push(sampleAt(traj, t, o));
+      if (t < 0.5) continue;
+      sumNy2 += c.last.loadFactorBody.y * c.last.loadFactorBody.y;
+      ++n;
+      // The headline value is the body-axis vector's Nz, not a separately filtered scalar.
+      CHECK(c.last.g == c.last.loadFactorBody.z);
+    }
+    CHECK(std::sqrt(sumNy2 / n) < 0.05);
+    CHECK(c.last.g == Approx(rollingPullNz(traj, nG, rollRate, c.last.t)).epsilon(0.02));
+  }
+
+  PipelineConfig cfg;
+  cfg.gMode = GMode::Total;
+  TelemetryPipeline total(cfg);
+  fly(total, traj, 0.0, 2.0);
+  CHECK(total.snapshot().current.g == total.snapshot().current.gTotal);
+  CHECK(total.snapshot().current.g == Approx(nG).epsilon(0.01));
+}
+
+TEST_CASE("persistent high G at 30 and 144 fps with uneven frame time") {
+  const double nz = 9.0;  // within plausibleGLimit, held for 4 s
+  const Trajectory turn = levelTurn(std::acos(1.0 / nz) * kRadToDeg);
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<double> jitter(-0.35, 0.35);
+  for (double fps : {30.0, 144.0}) {
+    for (bool positionOnly : {false, true}) {
+      CAPTURE(fps);
+      CAPTURE(positionOnly);
+      FlyOptions o;
+      o.positionOnly = positionOnly;
+      TelemetryPipeline p;
+      RecordingConsumer c;
+      p.addConsumer(&c);
+      double maxErr = 0.0;
+      for (double t = 0.0; t < 4.0; t += (1.0 + jitter(rng)) / fps) {
+        p.push(sampleAt(turn, t, o));
+        if (t > 0.5) maxErr = std::max(maxErr, std::abs(c.last.g - nz));
+      }
+      CHECK(maxErr < 0.01);
+      const MetricsSnapshot s = p.snapshot();
+      CHECK(s.quality.rejectedImplausible == 0);
+      CHECK(s.quality.resetsTeleport == 0);
+      CHECK(s.quality.resetsGap == 0);
+      CHECK(s.mission.highGEpisodes == 1);
+      CHECK(s.mission.longestHighGS > 3.5);
+    }
+  }
+}

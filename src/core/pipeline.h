@@ -4,7 +4,8 @@
 //   push(sample)
 //     -> sanitize (non-finite, time order, gaps, teleports)
 //     -> kinematics (acceleration from timestamped velocity / position, least squares)
-//     -> load factor in body axes -> median + EMA smoothing -> onset rate
+//     -> load factor in body axes (attitude at the acceleration's time)
+//     -> median + EMA smoothing -> G per GMode -> onset rate
 //     -> AoA / sideslip, sustained high-G timer
 //     -> mission state machine + statistics
 //     -> consumers (IMetricsConsumer)
@@ -21,14 +22,21 @@ namespace ft {
 
 struct PipelineConfig {
   GMode gMode = GMode::Nz;
-  double accelWindowS = 0.08;       // least-squares window for acceleration
+  double accelWindowS = 0.08;       // least-squares window for acceleration (velocity input)
+  // Same for position-only input: differentiating noisy positions twice needs a longer
+  // window (more lag, ~windowS / 2) to keep the G noise comparable to velocity input.
+  double accelWindowPositionOnlyS = 0.15;
   double onsetWindowS = 0.15;       // least-squares window for dG/dt
-  double smoothingTauS = 0.10;      // EMA time constant applied to G (0 = off)
-  int medianWindow = 5;             // samples, odd, 1 = off. Removes single-sample spikes.
+  double smoothingTauS = 0.05;      // EMA time constant applied to G (0 = off)
+  // Median filter length in *samples* (odd, 1 = off); removes single-sample spikes. Its
+  // delay is (N - 1) / 2 frames, so it depends on frame rate: ~33 ms at 60 fps for N = 5.
+  int medianWindow = 5;
   double highGEnter = 6.0;          // sustained high-G episode starts at >= this
   double highGExit = 5.5;           // ... and ends below this (hysteresis)
   double maxGapS = 0.25;            // dt above this resets differentiators (hitch/pause)
-  double plausibleGLimit = 15.0;    // |G| above this is treated as a data glitch
+  // |load factor| above this is treated as a data glitch: the sample's G is not used and
+  // the last valid filtered values are held for it.
+  double plausibleGLimit = 15.0;
   double teleportToleranceM = 50.0; // |dp - v*dt| above this is treated as a teleport
   double minSpeedForAoa = 20.0;     // m/s
   double timelineHz = 10.0;         // mission report timeline resolution
@@ -39,7 +47,10 @@ struct PipelineConfig {
 class IMetricsConsumer {
  public:
   virtual ~IMetricsConsumer() = default;
-  // Called for every accepted sample while phase is Active or None (not Paused).
+  // Called for every processed sample in every phase except Paused (so effects can keep
+  // fading out on the results screen while Ended). Samples dropped before the estimators
+  // (non-finite, bad timestamp, spike) produce no call; a sample whose G was implausible
+  // produces one with the held values.
   virtual void onMetrics(const FlightMetrics& metrics, MissionPhase phase) = 0;
   virtual void onMissionStarted() {}
   virtual void onMissionEnded(const MissionReport& /*report*/) {}
@@ -53,8 +64,11 @@ class TelemetryPipeline {
   TelemetryPipeline(const TelemetryPipeline&) = delete;
   TelemetryPipeline& operator=(const TelemetryPipeline&) = delete;
 
-  // Applies new tuning. Filter state is reset only if a window/size parameter changed;
-  // mission statistics are always preserved.
+  // Applies new tuning. Filter state is reset only if a window/size parameter or the G
+  // mode changed. Mission statistics are preserved, except that a G mode change clears
+  // the G-derived ones (extremes, onset, histogram, high-G, timeline) and the recent
+  // history, since Nz and |n| values must not be mixed. Duration, max speed, max AoA and
+  // sample counts are kept.
   void setConfig(const PipelineConfig& config);
   const PipelineConfig& config() const;
 

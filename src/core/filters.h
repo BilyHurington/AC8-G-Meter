@@ -89,17 +89,19 @@ class TimedWindow {
   double time(int i) const { return times_[index(i)]; }
   const T& value(int i) const { return values_[index(i)]; }
 
+  double meanTime() const {
+    double sum = 0.0;
+    for (int i = 0; i < count_; ++i) sum += time(i);
+    return count_ > 0 ? sum / count_ : 0.0;
+  }
+
   // Least-squares dv/dt over the window. Times are centred on their mean, so uneven
   // spacing is handled exactly and large absolute timestamps lose no precision.
   T slope() const {
     if (count_ < 2) return T{};
-    double tMean = 0.0;
+    const double tMean = meanTime();
     T vMean{};
-    for (int i = 0; i < count_; ++i) {
-      tMean += time(i);
-      vMean = vMean + value(i);
-    }
-    tMean /= count_;
+    for (int i = 0; i < count_; ++i) vMean = vMean + value(i);
     vMean = vMean * (1.0 / count_);
     double stt = 0.0;
     T stv{};

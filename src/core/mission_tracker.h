@@ -30,6 +30,12 @@ class MissionTracker {
   // Clears live statistics and timeline without closing the mission.
   void clearStats();
 
+  // Clears everything derived from `g` (extremes, onset, histogram, high-G statistics,
+  // timeline) but keeps duration, max speed, max AoA and sample counts. Used when the
+  // G mode changes mid-mission: Nz and |n| values are not comparable. The timeline then
+  // restarts at the current mission time (MissionReport::timelineStartS).
+  void resetGStats();
+
   const MissionStats& stats() const { return stats_; }
 
  private:
@@ -37,8 +43,10 @@ class MissionTracker {
   static constexpr std::size_t kMaxTimelinePoints = 1'000'000;
 
   MissionStats stats_;
+  bool hasG_ = false;  // G extremes initialised since start() / resetGStats()
   std::vector<float> timeline_;
   double timelineHz_ = 10.0;
+  double timelineStartS_ = 0.0;
   std::uint32_t nextId_ = 1;
   bool open_ = false;
 };

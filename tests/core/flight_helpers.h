@@ -116,6 +116,28 @@ class GProfile {
   double t_ = 0.0, z_ = 0.0, vz_ = 0.0;
 };
 
+// Barrel-roll style "rolling pull": the specific force has constant magnitude nG and
+// rotates about the flight direction at rollRate (rad/s); the attitude keeps it in the
+// body forward-up plane, so the true side force Ny is exactly 0. Speed ~kSpeed.
+inline Trajectory rollingPull(double nG, double rollRate) {
+  const double a = nG * kG0, w = rollRate, r = a / (w * w);
+  return [=](double t) {
+    const double c = std::cos(w * t), s = std::sin(w * t);
+    const Vec3 vel{kSpeed, a / w * s, -a / w * c - kG0 * t};
+    const Vec3 force{0.0, a * c, a * s};  // specific force = acceleration - gravity
+    Basis b;
+    b.forward = normalized(vel);
+    b.up = normalized(force - b.forward * dot(force, b.forward));
+    b.right = cross(b.up, b.forward);
+    return State{{kSpeed * t, -r * c, 3000.0 - r * s - 0.5 * kG0 * t * t}, vel, b};
+  };
+}
+// True Nz of rollingPull at time t (the part of the specific force normal to the path).
+inline double rollingPullNz(const Trajectory& traj, double nG, double rollRate, double t) {
+  const Vec3 force{0.0, nG * kG0 * std::cos(rollRate * t), nG * kG0 * std::sin(rollRate * t)};
+  return dot(force, traj(t).attitude.up) / kG0;
+}
+
 inline RawFlightSample levelSample(double t, MissionPhase phase = MissionPhase::Active) {
   RawFlightSample r;
   r.t = t;
@@ -127,7 +149,7 @@ inline RawFlightSample levelSample(double t, MissionPhase phase = MissionPhase::
 
 // Records every callback.
 struct RecordingConsumer : IMetricsConsumer {
-  int metrics = 0, metricsActive = 0, metricsNone = 0;
+  int metrics = 0, metricsActive = 0, metricsNone = 0, metricsEnded = 0;
   int started = 0, ended = 0, resets = 0;
   std::uint32_t lastReportId = 0;
   FlightMetrics last;
@@ -135,6 +157,7 @@ struct RecordingConsumer : IMetricsConsumer {
     ++metrics;
     if (phase == MissionPhase::Active) ++metricsActive;
     if (phase == MissionPhase::None) ++metricsNone;
+    if (phase == MissionPhase::Ended) ++metricsEnded;
     last = m;
   }
   void onMissionStarted() override { ++started; }
