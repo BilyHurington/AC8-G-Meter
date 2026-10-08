@@ -88,6 +88,18 @@ TEST_CASE("metric lines are aligned HUD rows") {
 
   s.current.g = 10.24;  // double digits widen to the left, decimal point stays put
   CHECK(formatMetricLine(MetricId::CurrentG, s) == "G     +10.2");
+  s.current.g = 23.44;
+  CHECK(formatMetricLine(MetricId::CurrentG, s) == "G     +23.4");
+  s.mission.maxG = 23.44;
+  CHECK(formatMetricLine(MetricId::MaxG, s) == "MAX G +23.4");
+  // Three digits no longer fit the column: the line grows by one character (the HUD box
+  // sizes itself to the text), nothing is cut off and the label keeps its separator.
+  s.current.g = 123.44;
+  s.mission.maxG = 123.44;
+  CHECK(formatMetricLine(MetricId::CurrentG, s) == "G     +123.4");
+  CHECK(formatMetricLine(MetricId::MaxG, s) == "MAX G +123.4");
+  s.current.g = -104.96;
+  CHECK(formatMetricLine(MetricId::CurrentG, s) == "G     -105.0");
 }
 
 TEST_CASE("invalid data shows dashes") {
@@ -113,6 +125,8 @@ TEST_CASE("clock and histogram labels") {
   CHECK(gBinLabel(0) == "< -1");
   CHECK(gBinLabel(1) == "-1..0");
   CHECK(gBinLabel(4) == "3..5");
-  CHECK(gBinLabel(kGBinCount - 1) == ">= 9");
+  CHECK(gBinLabel(7) == "9..12");
+  CHECK(gBinLabel(8) == "12..15");
+  CHECK(gBinLabel(kGBinCount - 1) == ">= 15");
   for (int i = 0; i < kGBinCount; ++i) CHECK_FALSE(gBinLabel(i).empty());
 }

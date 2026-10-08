@@ -128,7 +128,7 @@ TEST_CASE("uneven frame time (30-144 fps jitter) stays accurate") {
       if (t > 0.5) maxErr = std::max(maxErr, std::abs(c.last.g - 2.0));
     }
     CHECK(maxErr < 0.01);
-    CHECK(p.snapshot().quality.rejectedImplausible == 0);
+    CHECK(p.snapshot().quality.rejectedSpike == 0);
   }
 }
 
@@ -215,7 +215,7 @@ TEST_CASE("rolling pull: acceleration is projected on the attitude of its own in
 }
 
 TEST_CASE("persistent high G at 30 and 144 fps with uneven frame time") {
-  const double nz = 9.0;  // within plausibleGLimit, held for 4 s
+  const double nz = 9.0;  // held for 4 s
   const Trajectory turn = levelTurn(std::acos(1.0 / nz) * kRadToDeg);
   std::mt19937 rng(7);
   std::uniform_real_distribution<double> jitter(-0.35, 0.35);
@@ -235,7 +235,7 @@ TEST_CASE("persistent high G at 30 and 144 fps with uneven frame time") {
       }
       CHECK(maxErr < 0.01);
       const MetricsSnapshot s = p.snapshot();
-      CHECK(s.quality.rejectedImplausible == 0);
+      CHECK(s.quality.rejectedSpike == 0);
       CHECK(s.quality.resetsTeleport == 0);
       CHECK(s.quality.resetsGap == 0);
       CHECK(s.mission.highGEpisodes == 1);

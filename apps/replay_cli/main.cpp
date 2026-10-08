@@ -297,12 +297,13 @@ void printText(const std::string& path, const ReplayResult& r) {
   std::printf("  time in G bins:");
   for (double s : m.timeInGBinS) std::printf(" %.1f", s);
   std::printf(" s\n");
-  std::printf("quality  accepted %llu, rejected: non-finite %llu, time %llu, implausible %llu; "
-              "resets: gap %llu, teleport %llu\n",
+  std::printf("quality  accepted %llu (extreme G %llu), rejected: non-finite %llu, time %llu, "
+              "spike %llu; resets: gap %llu, teleport %llu\n",
               static_cast<unsigned long long>(q.accepted),
+              static_cast<unsigned long long>(q.extremeG),
               static_cast<unsigned long long>(q.rejectedNonFinite),
               static_cast<unsigned long long>(q.rejectedTime),
-              static_cast<unsigned long long>(q.rejectedImplausible),
+              static_cast<unsigned long long>(q.rejectedSpike),
               static_cast<unsigned long long>(q.resetsGap),
               static_cast<unsigned long long>(q.resetsTeleport));
   auto err = [](const char* name, const char* unit, const ErrorStats& e) {
@@ -339,12 +340,14 @@ void printJson(const std::string& path, const ReplayResult& r, bool checked, boo
               r.snapshot.lastReport && r.snapshot.lastReport->aborted ? "true" : "false", m.durationS,
               m.maxG, m.maxGAtS, m.minG, m.minGAtS, m.maxOnset, m.minOnset, m.maxAoaDeg, m.maxSpeed,
               m.highGEpisodes, m.longestHighGS, m.totalHighGS);
-  std::printf("  \"quality\": {\"accepted\": %llu, \"rejected_non_finite\": %llu, \"rejected_time\": %llu, "
-              "\"rejected_implausible\": %llu, \"resets_gap\": %llu, \"resets_teleport\": %llu},\n",
+  std::printf("  \"quality\": {\"accepted\": %llu, \"extreme_g\": %llu, \"rejected_non_finite\": %llu, "
+              "\"rejected_time\": %llu, \"rejected_spike\": %llu, \"resets_gap\": %llu, "
+              "\"resets_teleport\": %llu},\n",
               static_cast<unsigned long long>(q.accepted),
+              static_cast<unsigned long long>(q.extremeG),
               static_cast<unsigned long long>(q.rejectedNonFinite),
               static_cast<unsigned long long>(q.rejectedTime),
-              static_cast<unsigned long long>(q.rejectedImplausible),
+              static_cast<unsigned long long>(q.rejectedSpike),
               static_cast<unsigned long long>(q.resetsGap),
               static_cast<unsigned long long>(q.resetsTeleport));
   std::printf("  \"error_nz\": ");

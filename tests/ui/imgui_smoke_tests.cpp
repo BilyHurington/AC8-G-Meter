@@ -73,7 +73,8 @@ MetricsSnapshot fakeSnapshot(std::uint32_t reportId) {
     r->id = reportId;
     r->stats = s.mission;
     r->stats.durationS = 125.0;
-    r->stats.timeInGBinS = {1, 2, 30, 50, 20, 10, 5, 0};
+    r->stats.timeInGBinS = {1, 2, 30, 50, 20, 10, 5, 3, 2, 1};
+    r->stats.extremeGSamples = 42;
     for (int i = 0; i < 1250; ++i) r->gTimeline.push_back(static_cast<float>(1.0 + 5.0 * ((i % 100) / 100.0)));
     s.lastReport = r;
   }

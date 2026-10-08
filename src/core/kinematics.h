@@ -18,9 +18,10 @@ namespace ft {
 class KinematicsEstimator {
  public:
   static constexpr int kMinPoints = 3;  // for an acceleration estimate
-  // Position-only input: minimum window span, as a fraction of the window length, before
-  // an acceleration is reported.
-  static constexpr double kMinPositionSpan = 0.6;
+  // Minimum window span, as a fraction of the window length, before an acceleration is
+  // reported. A fit over just a few frames turns input noise into tens of G at high sample
+  // rates (3 velocity samples 1 ms apart with 0.2 m/s of noise: ~14 G per axis).
+  static constexpr double kMinSpan = 0.6;
 
   void setWindows(double velocityWindowS, double positionWindowS) {
     velocityWindowS_ = velocityWindowS;
@@ -43,10 +44,12 @@ class KinematicsEstimator {
   double lastTime() const { return lastT_; }
   Vec3 lastPosition() const { return lastP_; }
 
-  // Velocity input: acceleration implied by the single step from the newest sample to
-  // this one, or nothing if there is not enough state. Used to reject spikes before they
-  // enter the window (one bad point would otherwise corrupt every estimate it stays in).
-  std::optional<Vec3> stepAcceleration(double t, const std::optional<Vec3>& velocity) const;
+  // Velocity input: the velocity expected at time t from the newest sample and the current
+  // least-squares acceleration trend (also used before acceleration() is reported), or
+  // nothing in position mode / with fewer than 2 samples (no trend known yet). Used to
+  // reject spikes before they enter the window (one bad point would otherwise corrupt
+  // every estimate it stays in).
+  std::optional<Vec3> predictVelocity(double t) const;
 
   // Position-only input: where the current fit puts the aircraft at time t (the fit
   // extrapolated, or the newest position + velocity * dt with only two samples), or

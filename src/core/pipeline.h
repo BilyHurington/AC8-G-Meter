@@ -34,9 +34,16 @@ struct PipelineConfig {
   double highGEnter = 6.0;          // sustained high-G episode starts at >= this
   double highGExit = 5.5;           // ... and ends below this (hysteresis)
   double maxGapS = 0.25;            // dt above this resets differentiators (hitch/pause)
-  // |load factor| above this is treated as a data glitch: the sample's G is not used and
-  // the last valid filtered values are held for it.
-  double plausibleGLimit = 15.0;
+  // Spike gate (velocity input), in G: a sample is a data glitch if its velocity misses the
+  // value predicted from the recent least-squares trend by more than this acceleration
+  // deviation over one step (or by more than the input's own noise allows, whichever is
+  // larger). A real manoeuvre cannot change the load factor by 30 G between two frames; a
+  // game glitch such as a +300 m/s velocity error reads as ~1800 G at 60 fps. Consistency
+  // only: there is no cap on the G value itself.
+  double spikeDeviationG = 30.0;
+  // Informational only: samples with |load factor| above this are counted in
+  // DataQuality::extremeG / MissionStats::extremeGSamples. They are used like any other.
+  double extremeGThreshold = 15.0;
   double teleportToleranceM = 50.0; // |dp - v*dt| above this is treated as a teleport
   double minSpeedForAoa = 20.0;     // m/s
   double timelineHz = 10.0;         // mission report timeline resolution
@@ -49,8 +56,7 @@ class IMetricsConsumer {
   virtual ~IMetricsConsumer() = default;
   // Called for every processed sample in every phase except Paused (so effects can keep
   // fading out on the results screen while Ended). Samples dropped before the estimators
-  // (non-finite, bad timestamp, spike) produce no call; a sample whose G was implausible
-  // produces one with the held values.
+  // (non-finite, bad timestamp, spike) produce no call.
   virtual void onMetrics(const FlightMetrics& metrics, MissionPhase phase) = 0;
   virtual void onMissionStarted() {}
   virtual void onMissionEnded(const MissionReport& /*report*/) {}

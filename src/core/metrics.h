@@ -35,8 +35,8 @@ struct FlightMetrics {
   double highGDurationS = 0.0; // length of the current high-G episode, 0 when not in one
 };
 
-// G histogram buckets: (-inf,-1) [-1,0) [0,1) [1,3) [3,5) [5,7) [7,9) [9,inf)
-inline constexpr std::array<double, 7> kGBinEdges{-1.0, 0.0, 1.0, 3.0, 5.0, 7.0, 9.0};
+// G histogram buckets: (-inf,-1) [-1,0) [0,1) [1,3) [3,5) [5,7) [7,9) [9,12) [12,15) [15,inf)
+inline constexpr std::array<double, 9> kGBinEdges{-1.0, 0.0, 1.0, 3.0, 5.0, 7.0, 9.0, 12.0, 15.0};
 inline constexpr int kGBinCount = static_cast<int>(kGBinEdges.size()) + 1;
 int gBinIndex(double g);
 
@@ -56,7 +56,8 @@ struct MissionStats {
   int highGEpisodes = 0;
   std::array<double, kGBinCount> timeInGBinS{};
   std::uint64_t acceptedSamples = 0;
-  std::uint64_t rejectedSamples = 0;
+  std::uint64_t rejectedSamples = 0;  // dropped as spikes or for bad timestamps / values
+  std::uint64_t extremeGSamples = 0;  // accepted, |load factor| > PipelineConfig::extremeGThreshold
 };
 
 // Immutable record of a finished mission, published once per mission.
@@ -69,6 +70,7 @@ struct MissionReport {
   // Mission time of gTimeline[0]. 0 unless the G mode changed mid-mission, which restarts
   // the timeline (and the other G statistics) at that point.
   double timelineStartS = 0.0;
+  double extremeGThreshold = 15.0;  // the threshold stats.extremeGSamples was counted with
 };
 
 // Fixed-size ring of recent `g` values at a fixed rate (sparklines, future physiology).
@@ -89,7 +91,10 @@ struct DataQuality {
   std::uint64_t accepted = 0;
   std::uint64_t rejectedNonFinite = 0;   // NaN/Inf or degenerate attitude
   std::uint64_t rejectedTime = 0;        // dt <= 0 (duplicate / out-of-order timestamps)
-  std::uint64_t rejectedImplausible = 0; // |G| beyond the physical plausibility limit
+  std::uint64_t rejectedSpike = 0;       // inconsistent with the recent motion (spike gate)
+  // Informational, not a rejection: accepted samples whose |load factor| exceeded
+  // PipelineConfig::extremeGThreshold. There is no G cap; these are reported as measured.
+  std::uint64_t extremeG = 0;
   std::uint64_t resetsGap = 0;           // dt too large (hitch, pause, load) -> estimators reset
   std::uint64_t resetsTeleport = 0;      // position jump inconsistent with velocity -> reset
 };

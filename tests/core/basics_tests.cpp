@@ -69,6 +69,10 @@ TEST_CASE("gBinIndex bucket edges") {
   CHECK(gBinIndex(2.99) == 3);
   CHECK(gBinIndex(5.0) == 5);
   CHECK(gBinIndex(9.0) == 7);
+  CHECK(gBinIndex(11.99) == 7);
+  CHECK(gBinIndex(12.0) == 8);
+  CHECK(gBinIndex(15.0) == 9);
+  CHECK(kGBinCount == 10);
   CHECK(gBinIndex(50.0) == kGBinCount - 1);
 }
 

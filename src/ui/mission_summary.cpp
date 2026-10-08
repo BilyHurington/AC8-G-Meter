@@ -61,7 +61,7 @@ void histogram(const MissionStats& st) {
     ImGui::SameLine(labelW);
     char overlay[48];
     std::snprintf(overlay, sizeof overlay, "%.1f s  (%.0f%%)", secs, 100.0 * static_cast<double>(frac));
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, i >= 5 ? kWarn : kAccent);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, i >= 5 ? kWarn : kAccent);  // bins from 5 G up
     ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     ImGui::PopStyleColor();
   }
@@ -145,6 +145,9 @@ void drawMissionSummary(const MissionReport& report, const Settings& settings, b
   ImGui::Text("%llu samples accepted, %llu rejected",
               static_cast<unsigned long long>(st.acceptedSamples),
               static_cast<unsigned long long>(st.rejectedSamples));
+  if (st.extremeGSamples > 0)
+    ImGui::Text("%llu extreme-G samples (> %s G)", static_cast<unsigned long long>(st.extremeGSamples),
+                formatNumber(report.extremeGThreshold, 0, false).c_str());
 
   ImGui::Spacing();
   if (ImGui::Button("Close", ImVec2(fs * 6.0f, 0.0f))) open = false;

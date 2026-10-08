@@ -18,11 +18,11 @@ class MissionTracker {
 
   void countAccepted() { ++stats_.acceptedSamples; }
   void countRejected() { ++stats_.rejectedSamples; }
+  void countExtremeG() { ++stats_.extremeGSamples; }
 
   // Advances mission time by the game time since the previous accepted sample. Called for
   // every accepted Active sample, valid metrics or not, so estimator warm-up after a reset
-  // and held (implausible) samples never shorten the mission. Pauses are excluded because
-  // game time stops while paused.
+  // never shortens the mission. Pauses are excluded because game time stops while paused.
   void addTime(double dtS);
 
   // Adds one sample with valid metrics, at the current mission time (call addTime first).

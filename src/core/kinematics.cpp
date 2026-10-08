@@ -35,9 +35,10 @@ void KinematicsEstimator::add(double t, const Vec3& position, const std::optiona
 
 void KinematicsEstimator::estimateFromVelocity() {
   hasVelocity_ = true;
-  velocity_ = window_.value(window_.size() - 1);
-  hasAccel_ = window_.size() >= kMinPoints;
-  accel_ = hasAccel_ ? window_.slope() : Vec3{};
+  const int n = window_.size();
+  velocity_ = window_.value(n - 1);
+  hasAccel_ = n >= kMinPoints && window_.time(n - 1) - window_.time(0) >= kMinSpan * velocityWindowS_;
+  accel_ = window_.slope();  // 0 with a single sample
   accelT_ = window_.meanTime();
 }
 
@@ -92,7 +93,7 @@ void KinematicsEstimator::estimateFromPosition() {
   // A fit over just a few frames turns centimetres of position noise into tens of G:
   // report acceleration only once the window spans most of its length (at low frame
   // rates the kMinPoints samples always do).
-  hasAccel_ = 2.0 * h >= kMinPositionSpan * positionWindowS_;
+  hasAccel_ = 2.0 * h >= kMinSpan * positionWindowS_;
 
   // Noise estimate: residual sum of squares over the 3 (n - 3) degrees of freedom left.
   if (n > kMinPoints) {
@@ -105,11 +106,9 @@ void KinematicsEstimator::estimateFromPosition() {
   }
 }
 
-std::optional<Vec3> KinematicsEstimator::stepAcceleration(double t,
-                                                          const std::optional<Vec3>& velocity) const {
-  const double dt = t - lastT_;
-  if (mode_ != Mode::Velocity || !velocity || dt <= 0.0) return std::nullopt;
-  return (*velocity - velocity_) / dt;
+std::optional<Vec3> KinematicsEstimator::predictVelocity(double t) const {
+  if (mode_ != Mode::Velocity || window_.size() < 2) return std::nullopt;
+  return velocity_ + accel_ * (t - lastT_);
 }
 
 std::optional<Vec3> KinematicsEstimator::predictPosition(double t) const {

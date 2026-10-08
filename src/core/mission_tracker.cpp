@@ -25,6 +25,7 @@ void MissionTracker::resetGStats() {
   stats_.maxSpeed = old.maxSpeed;
   stats_.acceptedSamples = old.acceptedSamples;
   stats_.rejectedSamples = old.rejectedSamples;
+  stats_.extremeGSamples = old.extremeGSamples;  // |n|, independent of the G mode
   timeline_.clear();
   timelineStartS_ = old.durationS;
 }

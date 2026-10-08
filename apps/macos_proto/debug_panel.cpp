@@ -284,7 +284,8 @@ void ProtoApp::readouts() {
   ImGui::Text("accepted %llu", static_cast<unsigned long long>(q.accepted));
   ImGui::Text("rejected: non-finite %llu  time %llu", static_cast<unsigned long long>(q.rejectedNonFinite),
               static_cast<unsigned long long>(q.rejectedTime));
-  ImGui::Text("          implausible %llu", static_cast<unsigned long long>(q.rejectedImplausible));
+  ImGui::Text("          spike %llu  (extreme G %llu)", static_cast<unsigned long long>(q.rejectedSpike),
+              static_cast<unsigned long long>(q.extremeG));
   ImGui::Text("resets: gap %llu  teleport %llu", static_cast<unsigned long long>(q.resetsGap),
               static_cast<unsigned long long>(q.resetsTeleport));
   if (snap.lastReport) ImGui::TextDisabled("last mission report: #%u", snap.lastReport->id);

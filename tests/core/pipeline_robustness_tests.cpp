@@ -24,7 +24,7 @@ TEST_CASE("a single velocity spike is rejected before it can corrupt the window"
     if (c.last.valid) maxDev = std::max(maxDev, std::abs(c.last.g - 1.0));
   }
   const MetricsSnapshot snap = p.snapshot();
-  CHECK(snap.quality.rejectedImplausible == 1);
+  CHECK(snap.quality.rejectedSpike == 1);
   CHECK(snap.mission.rejectedSamples == 1);
   CHECK(snap.quality.resetsTeleport == 0);
   CHECK(maxDev < 1e-6);
@@ -40,7 +40,7 @@ TEST_CASE("a single position spike (position-only input) is rejected") {
     p.push(s);
   }
   const MetricsSnapshot snap = p.snapshot();
-  CHECK(snap.quality.rejectedImplausible == 1);
+  CHECK(snap.quality.rejectedSpike == 1);
   CHECK(snap.quality.resetsTeleport == 0);
   CHECK(snap.mission.maxG == Approx(1.0).epsilon(1e-6));
   CHECK(snap.mission.minG == Approx(1.0).epsilon(1e-6));
@@ -56,7 +56,7 @@ TEST_CASE("a persistent velocity jump is accepted as a discontinuity") {
     p.push(s);
   }
   const MetricsSnapshot snap = p.snapshot();
-  CHECK(snap.quality.rejectedImplausible == 2);
+  CHECK(snap.quality.rejectedSpike == 2);
   CHECK(snap.quality.resetsTeleport == 1);
   CHECK(c.resets == 1);
   CHECK(snap.current.valid);
@@ -151,7 +151,7 @@ TEST_CASE("teleport detection resets and notifies consumers") {
     const MetricsSnapshot s = p.snapshot();
     CHECK(s.quality.resetsTeleport == 1);
     CHECK(c.resets == 1);
-    CHECK(s.quality.rejectedImplausible == 0);
+    CHECK(s.quality.rejectedSpike == 0);
     CHECK(s.mission.maxG == Approx(1.0).epsilon(1e-6));
     CHECK(s.current.valid);
   }
@@ -176,42 +176,9 @@ TEST_CASE("resuming from pause restarts the differentiators") {
   fly(p, resumed, 1.0 + 1.0 / 60.0, 2.0);
   const MetricsSnapshot s = p.snapshot();
   CHECK(s.mission.maxG == Approx(1.0).epsilon(1e-6));
-  CHECK(s.quality.rejectedImplausible == 0);
+  CHECK(s.quality.rejectedSpike == 0);
   CHECK(s.quality.resetsGap == 0);
   CHECK(s.current.speed == Approx(kSpeed + 40.0));
-}
-
-TEST_CASE("implausible G holds the last values but keeps mission time") {
-  // 1 s beyond plausibleGLimit (15 G) inside a 5 s mission, reached by a 30 G/s ramp
-  // that is smooth enough to pass the spike gate.
-  GProfile prof([](double t) {
-    if (t < 1.5) return 1.0;
-    if (t < 2.0) return 1.0 + 30.0 * (t - 1.5);
-    if (t < 3.0) return 16.0;
-    if (t < 3.5) return 16.0 - 30.0 * (t - 3.0);
-    return 1.0;
-  });
-  TelemetryPipeline p;
-  RecordingConsumer c;
-  p.addConsumer(&c);
-  double maxShown = 0.0;
-  bool validThroughout = true;
-  for (double t = 0.0; t < 5.0 - 1e-9; t += 1.0 / 60.0) {
-    p.push(sampleAt(prof.trajectory(), t));
-    maxShown = std::max(maxShown, c.last.g);
-    if (t > 0.2) validThroughout = validThroughout && c.last.valid;
-  }
-  const MetricsSnapshot s = p.snapshot();
-  CHECK(s.quality.rejectedImplausible > 30);
-  CHECK(s.mission.rejectedSamples == s.quality.rejectedImplausible);
-  CHECK(validThroughout);              // held values, never "--"
-  CHECK(maxShown < 15.0);
-  CHECK(s.mission.maxG == Approx(maxShown));
-  CHECK(s.mission.durationS == Approx(5.0).epsilon(0.005));
-  const double binSum = std::accumulate(s.mission.timeInGBinS.begin(), s.mission.timeInGBinS.end(), 0.0);
-  CHECK(binSum <= s.mission.durationS + 1e-9);  // warm-up frames are not in the histogram
-  CHECK(binSum > s.mission.durationS - 0.2);
-  CHECK(s.mission.totalHighGS > 1.2);  // the held (high) value keeps the high-G clock running
 }
 
 TEST_CASE("position-only input with centimetre noise: no false spikes, accurate G") {
@@ -244,7 +211,7 @@ TEST_CASE("position-only input with centimetre noise: no false spikes, accurate 
       ++n;
     }
     const MetricsSnapshot s = p.snapshot();
-    CHECK(s.quality.rejectedImplausible == 0);
+    CHECK(s.quality.rejectedSpike == 0);
     CHECK(s.quality.resetsTeleport == 0);
     // Measured: rms 0.12 / 0.10 G, max 0.50 / 0.28 G at 60 / 144 fps.
     CHECK(std::sqrt(sumSq / n) < 0.16);
@@ -266,22 +233,28 @@ TEST_CASE("position-only teleport is measured against the fit prediction") {
   fly(p, moved, 1.0, 2.0, o);
   const MetricsSnapshot s = p.snapshot();
   CHECK(s.quality.resetsTeleport == 1);
-  CHECK(s.quality.rejectedImplausible == 0);
+  CHECK(s.quality.rejectedSpike == 0);
   CHECK(s.mission.maxG == Approx(1.0).epsilon(1e-6));
 }
 
-TEST_CASE("a sudden jump to implausible G does not shorten the mission") {
-  // Level flight, then the trajectory switches instantly to a ~16 G turn: the estimators
-  // treat it as a discontinuity, but every second flown still counts as mission time.
+TEST_CASE("a respawn into a 16 G turn resets but keeps mission time and the real G") {
+  // Level turn, then the trajectory switches instantly to a ~16.4 G turn and back: each
+  // switch is a discontinuity (position and velocity jump), but every second flown still
+  // counts and the 16 G turn in between is reported as flown.
   TelemetryPipeline p;
   RecordingConsumer c;
   p.addConsumer(&c);
+  const double bank = 86.5, nz = 1.0 / std::cos(bank * kDegToRad);
   double t = fly(p, levelTurn(60.0), 0.0, 2.0);
-  t = fly(p, levelTurn(86.5), t, 4.0);
+  t = fly(p, levelTurn(bank), t, 4.0);
   t = fly(p, levelTurn(60.0), t, 6.0);
-  const MissionStats s = p.snapshot().mission;
+  const MetricsSnapshot snap = p.snapshot();
+  const MissionStats& s = snap.mission;
+  CHECK(snap.quality.resetsTeleport == 2);
+  CHECK(c.resets == 2);
   CHECK(s.durationS == Approx(6.0).epsilon(0.005));
-  CHECK(s.maxG < p.config().plausibleGLimit);
+  CHECK(s.maxG == Approx(nz).epsilon(0.01));
+  CHECK(snap.quality.extremeG > 0);
   CHECK(c.last.valid);
   CHECK(c.last.g == Approx(2.0).epsilon(1e-3));
 }
