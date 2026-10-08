@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <random>
 #include <string_view>
+#include <vector>
 
 #include "core/source.h"
 #include "sources/flight_model.h"
@@ -45,8 +46,10 @@ class SimulatedSource final : public ITelemetrySource {
   std::string_view name() const override { return "Simulator"; }
 
   // Deterministic offline generation (tests, data files): advance by exactly durationS of
-  // game time, ignoring timeScale and pause.
-  void generate(double durationS, std::vector<RawFlightSample>& out);
+  // game time, ignoring timeScale and pause. If `truthOut` is given, the exact state behind
+  // every emitted sample is appended to it (same count and order as the samples).
+  void generate(double durationS, std::vector<RawFlightSample>& out,
+                std::vector<FlightState>* truthOut = nullptr);
 
   // Restart from the initial state with the current options (re-seeds RNG).
   void restart();
@@ -55,7 +58,9 @@ class SimulatedSource final : public ITelemetrySource {
 
   void setTimeScale(double scale) { timeScale_ = scale; }   // 0.1 .. 8
   double timeScale() const { return timeScale_; }
-  void setPaused(bool paused);                               // reports MissionPhase::Paused
+  // While paused, poll() emits one sample per call at the frozen game time with phase
+  // Paused (like a game that keeps rendering its pause menu), so consumers see the pause.
+  void setPaused(bool paused);
   bool paused() const { return paused_; }
   void setManualInput(const ControlInput& input) { manualInput_ = input; }
 
@@ -74,27 +79,51 @@ class SimulatedSource final : public ITelemetrySource {
   const ControlInput& lastInput() const { return lastInput_; }
 
  private:
+  // One piece of a scripted manoeuvre sequence.
+  struct ScriptSegment {
+    enum class NzMode : std::uint8_t {
+      AltitudeHold,    // nz from the altitude/flight-path controller, bank -> bankDeg
+      Fixed,           // nz = nz, bank -> bankDeg
+      FixedLevelBank,  // nz = nz, bank chosen to hold altitude (side from sign of bankDeg)
+    };
+    double durationS = 1.0;
+    NzMode mode = NzMode::AltitudeHold;
+    double nz = 1.0;
+    double bankDeg = 0.0;           // positive = right wing down
+    double maxRollRateDegS = 90.0;
+    double nzMin = -2.0, nzMax = 7.0;  // clamp for AltitudeHold
+    bool recovery = false;          // a level-off segment (never interrupted by the guard)
+  };
+
   ControlInput scriptedInput(double t);
-  void stepFrame(double frameDt, std::vector<RawFlightSample>& out);
-  RawFlightSample makeSample();
+  ScriptSegment nextSegment();
+  ControlInput controlFor(const ScriptSegment& seg) const;
+  void stepFrame(double frameDt, std::vector<RawFlightSample>& out,
+                 std::vector<FlightState>* truthOut);
+  void advancePhysics(double dt);
+  RawFlightSample makeSample(bool paused);
+  double drawFrameDt();
+  double uniform(std::mt19937& rng, double lo, double hi);
+  double gaussian(double sigma);
 
   SimulatedSourceOptions options_;
   PointMassFlightModel model_;
-  std::mt19937 rng_;
+  std::mt19937 rng_;             // frame timing + dirty data
+  std::mt19937 scriptRng_;       // manoeuvre choice (independent of dirty-data settings)
   ControlInput manualInput_;
   ControlInput lastInput_;
   MissionPhase phase_ = MissionPhase::Active;
   double timeScale_ = 1.0;
   bool paused_ = false;
-  double accumulator_ = 0.0;     // real time not yet simulated
+  double accumulator_ = 0.0;     // scaled real time not yet simulated, s
   double nextFrameDt_ = 0.0;     // jittered length of the next game frame
   double hitchRemaining_ = 0.0;
   bool pendingSpike_ = false;
   bool pendingTeleport_ = false;
-  // Scenario-specific scratch state (DogfightMix manoeuvre schedule etc.)
+  // Scenario script state.
   double scriptPhaseStart_ = 0.0;
   int scriptStep_ = 0;
-  ControlInput scriptTarget_;
+  ScriptSegment segment_;
 };
 
 }  // namespace ft

@@ -2,6 +2,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "sources/csv_format.h"
 
@@ -12,6 +13,8 @@ class CsvRecorder {
   ~CsvRecorder() { close(); }
   bool open(const std::string& path, std::string* error = nullptr);  // truncates
   void write(const CsvRow& row);
+  // Writes "# <text>" (e.g. provenance or a replay_cli "check:" directive).
+  void writeComment(std::string_view text);
   void close();
   bool isOpen() const { return file_.is_open(); }
   const std::string& path() const { return path_; }

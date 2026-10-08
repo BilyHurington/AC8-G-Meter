@@ -8,6 +8,8 @@
 
 namespace ft {
 
+// Reads a log: '#' comment lines and blank lines are skipped, the first remaining line must
+// be the exact header. Errors name the offending line number.
 bool loadCsvLog(const std::string& path, std::vector<CsvRow>& rows, std::string* error = nullptr);
 
 class ReplaySource final : public ITelemetrySource {
@@ -30,7 +32,8 @@ class ReplaySource final : public ITelemetrySource {
   double progress() const;      // 0..1
   double durationS() const;
   const std::vector<CsvRow>& rows() const { return rows_; }
-  // Ground truth of the most recently emitted row, if the log has it.
+  // Most recently emitted row (null before the first poll) for its ground truth. Its
+  // sample.t is the original log time, without the loop offset.
   const CsvRow* lastEmitted() const;
   const std::string& path() const { return path_; }
 
@@ -44,6 +47,8 @@ class ReplaySource final : public ITelemetrySource {
   bool loop_ = false;
   // Looping restarts game time from 0; offset keeps emitted timestamps monotonic.
   double loopTimeOffset_ = 0.0;
+  static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
+  std::size_t lastEmitted_ = kNone;
 };
 
 }  // namespace ft

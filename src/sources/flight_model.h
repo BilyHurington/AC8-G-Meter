@@ -15,7 +15,8 @@ struct FlightModelParams {
   double minSpeed = 60.0;       // m/s, floor to keep the model well conditioned
   double maxSpeed = 600.0;      // m/s
   double maxThrustG = 1.2;      // longitudinal acceleration at full throttle, in G
-  double dragCoef = 1.2e-5;     // drag accel (G) = dragCoef * v^2 (+ induced, see .cpp)
+  double dragCoef = 1.2e-5;     // drag accel (G) = dragCoef * v^2 + induced term below
+  double inducedDragCoef = 0.012; // induced drag accel (G) = coef * n^2 * (refSpeed / v)^2
   double aoaPerG = 2.2;         // deg AoA per G at refSpeed (AoA ~ n / q)
   double refSpeed = 200.0;      // m/s
   double maxAoaDeg = 35.0;
@@ -42,13 +43,24 @@ class PointMassFlightModel {
   void reset(const FlightState& initial);
   // Advances by dt (s). Callers should sub-step at <= 1/120 s for accuracy.
   void step(double dt, const ControlInput& input);
+  // Shifts the aircraft without touching velocity or attitude (respawn / teleport).
+  void translate(const Vec3& offset);
   const FlightState& state() const { return state_; }
   const FlightModelParams& params() const { return params_; }
+  const Vec3& liftDir() const { return liftDir_; }
+
+  // AoA the model flies at for a given lift load factor and speed (deg, clamped).
+  double aoaDegFor(double nz, double speed) const;
 
  private:
+  void integrate(double h, const ControlInput& input);
+  Vec3 specificForce(const Vec3& vel, const Vec3& lift, double nz, double throttle) const;
+  void updateAttitudeAndTruth();
+
   FlightModelParams params_;
   FlightState state_;
   Vec3 liftDir_{0.0, 0.0, 1.0};  // unit, perpendicular to velocity (parallel-transported)
+  double throttle_ = 0.5;        // last throttle, needed to evaluate the truth force
 };
 
 }  // namespace ft
