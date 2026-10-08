@@ -13,6 +13,11 @@ endif()
 option(FT_BUILD_TESTS "Build unit tests" ON)
 option(FT_BUILD_MACOS_PROTO "Build the SDL3 + Metal standalone prototype (macOS only)" ${APPLE})
 
+# Sources are UTF-8; without this MSVC reads them in the system code page (e.g. 936).
+if(MSVC)
+  add_compile_options(/utf-8)
+endif()
+
 include(cmake/Deps.cmake)
 
 # Warning flags for first-party targets only (never applied to third-party code).

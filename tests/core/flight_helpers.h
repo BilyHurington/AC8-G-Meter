@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <ostream>  // doctest prints shared_ptr results via std::operator<<, which needs the complete ostream
 #include <random>
 #include <utility>
 

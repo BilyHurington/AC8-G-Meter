@@ -67,6 +67,17 @@ cmake -S . -B build -G Ninja && cmake --build build
 
 Dear ImGui 1.92、nlohmann/json 和 doctest 会在配置时由 CMake 的 FetchContent 自动下载。
 
+## 构建（Windows）
+
+依赖：Visual Studio 2022 或 Build Tools 2022（“使用 C++ 的桌面开发”，含 Windows SDK；CMake 和 Ninja 随附）。在 PowerShell 7 中：
+
+```powershell
+. .\scripts\dev-env.ps1      # 导入 MSVC x64 环境（cl、Windows SDK、VS 自带的 CMake/Ninja）
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
 ## 运行
 
 ```bash
