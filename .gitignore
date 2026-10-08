@@ -5,3 +5,7 @@ imgui.ini
 *.swp
 .vscode/
 .idea/
+
+# Design / planning documents: kept locally, never committed
+docs/
+platform/windows/README.md
