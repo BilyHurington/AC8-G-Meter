@@ -343,6 +343,20 @@ TEST_CASE("schema 1 files (before the sustained statistics) still load") {
   CHECK_FALSE(missionFromJson(text, out, entry, traceName, rows, &error));
 }
 
+TEST_CASE("mission files written before the rename to AC8 G-Meter still load") {
+  auto report = makeReport(4, 3);
+  std::string json = missionToJson(*report, 0, "20261008-140312_m4.trace.csv");
+  CHECK(json.find(kMissionFileFormat) != std::string::npos);
+  const std::size_t at = json.find(kMissionFileFormat);
+  json.replace(at, std::string(kMissionFileFormat).size(), kLegacyMissionFileFormat);
+  MissionReport r;
+  MissionIndexEntry e;
+  std::string traceName, error;
+  std::size_t rows = 0;
+  CHECK(missionFromJson(json, r, e, traceName, rows, &error));
+  CHECK(r.id == 4);
+}
+
 TEST_CASE("the trace column t keeps double precision") {
   auto report = makeReport(1, 3);
   report->trace.startS = 9000.05;  // 2.5 h: a float is off by ~0.2 ms here

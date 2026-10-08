@@ -34,7 +34,9 @@
 namespace ft {
 
 inline constexpr int kMissionFileSchema = 2;
-inline constexpr const char* kMissionFileFormat = "ac8-flight-telemetry-mission";
+inline constexpr const char* kMissionFileFormat = "ac8-gmeter-mission";
+// Written before the rename to AC8 G-Meter; still accepted when loading.
+inline constexpr const char* kLegacyMissionFileFormat = "ac8-flight-telemetry-mission";
 inline constexpr std::string_view kMissionJsonSuffix = ".json";
 inline constexpr std::string_view kMissionTraceSuffix = ".trace.csv";
 

@@ -471,7 +471,7 @@ struct MenuDriver {
   // IDs of the "Keep missions" InputInt parts: InputScalar pushes the label, then submits the
   // text field as "" and the step buttons as "-" / "+".
   static ImGuiID keepPart(const char* part) {
-    ImGuiWindow* w = ImGui::FindWindowByName("Flight Telemetry Settings###ft_settings");
+    ImGuiWindow* w = ImGui::FindWindowByName("G-Meter Settings###ft_settings");
     REQUIRE(w);
     return ImHashStr(part, 0, w->GetID("Keep missions"));
   }

@@ -237,7 +237,7 @@ std::string traceToCsv(const MissionReport& r) {
   out.reserve(64 * tr.size() + 512);
   std::array<char, 32> hz{};
   const auto hzEnd = std::to_chars(hz.data(), hz.data() + hz.size(), tr.hz).ptr;  // shortest round-trip form
-  out += "# AC8 Flight Telemetry mission trace (schema " + std::to_string(kMissionFileSchema) + "), mission " +
+  out += "# AC8 G-Meter mission trace (schema " + std::to_string(kMissionFileSchema) + "), mission " +
          std::to_string(r.id) + ", G mode " + gModeKey(r.gMode) + "\n";
   out += "# one row per 1/" + std::string(hz.data(), hzEnd) +
          " s of mission time; t = bucket start (s); g_mean = time-weighted mean of the live G,\n"
@@ -270,7 +270,7 @@ bool missionFromJson(std::string_view text, MissionReport& r, MissionIndexEntry&
   if (root.is_discarded() || !root.is_object()) return fail("invalid JSON");
   std::string format;
   readString(root, "format", format);
-  if (format != kMissionFileFormat) return fail("not a mission file");
+  if (format != kMissionFileFormat && format != kLegacyMissionFileFormat) return fail("not a mission file");
   int schema = 0;
   readUnsigned(root, "schema", schema);
   if (schema < 1 || schema > kMissionFileSchema) return fail("unsupported schema version");

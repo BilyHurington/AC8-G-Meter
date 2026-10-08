@@ -57,7 +57,7 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30.0f, 0.0f), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * 24.0f, 0.0f),
                                       ImVec2(FLT_MAX, vp->WorkSize.y * 0.95f));
-  if (!ImGui::Begin("Flight Telemetry Settings###ft_settings", &open,
+  if (!ImGui::Begin("G-Meter Settings###ft_settings", &open,
                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();
     return r;

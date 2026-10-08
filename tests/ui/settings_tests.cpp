@@ -289,7 +289,31 @@ TEST_CASE("toPipelineConfig applies the user-tunable fields only") {
 TEST_CASE("default settings path ends in the app folder") {
   const fs::path p = defaultSettingsPath();
   CHECK(p.filename() == "settings.json");
-  CHECK(p.parent_path().filename() == "AC8FlightTelemetry");
+  CHECK(p.parent_path().filename() == "AC8GMeter");
+  CHECK(legacySettingsPath().parent_path().filename() == "AC8FlightTelemetry");
+}
+
+TEST_CASE("the legacy app directory moves to the new name once") {
+  std::error_code ec;
+  const fs::path root = fs::path(FT_TEST_TMP_DIR) / "ui" / "rename";
+  fs::remove_all(root, ec);
+  const fs::path from = root / "AC8FlightTelemetry", to = root / "AC8GMeter";
+  fs::create_directories(from / "missions", ec);
+  std::ofstream(from / "settings.json") << "{}";
+
+  CHECK(migrateAppDir(from, to));
+  CHECK(fs::exists(to / "settings.json"));
+  CHECK(fs::is_directory(to / "missions"));
+  CHECK_FALSE(fs::exists(from));
+
+  // Never overwrites an existing new directory; a missing legacy one is a no-op.
+  fs::create_directories(from, ec);
+  std::string error;
+  CHECK_FALSE(migrateAppDir(from, to, &error));
+  CHECK(error.empty());
+  CHECK(fs::exists(from));
+  CHECK_FALSE(migrateAppDir(root / "missing", root / "other", &error));
+  fs::remove_all(root, ec);
 }
 
 TEST_CASE("version 1 settings migrate to adaptive filtering unless the smoothing was tuned") {

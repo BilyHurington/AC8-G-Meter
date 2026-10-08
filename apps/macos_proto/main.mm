@@ -2,7 +2,7 @@
 // Stands in for the game: the UE4SS mod will host the same ft_ui code from a DX11/DX12
 // Present hook. Based on imgui/examples/example_sdl3_metal.
 //
-// Usage: ft_macos_proto [--settings <file.json>] [--scenario <name>] [--size WxH]
+// Usage: ac8_gmeter_proto [--settings <file.json>] [--scenario <name>] [--size WxH]
 //                       [--menu] [--edit] [--history] [--no-debug] [--end-mission-at <s>] [--velocity-noise <m/s>]
 //                       [--missions <dir>]
 //                       [--screenshot <file.png> [--frames N]]
@@ -120,6 +120,16 @@ int main(int argc, char** argv) {
   // Paths: assets/replays next to the executable (copied post-build), else the source tree.
   const fs::path base = SDL_GetBasePath() ? fs::path(SDL_GetBasePath()) : fs::current_path();
   const fs::path src = FT_SOURCE_DIR;
+  if (args.settingsPath.empty()) {
+    // Settings and mission history saved before the rename to AC8 G-Meter move along.
+    std::string migrateError;
+    if (ft::migrateAppDir(ft::legacySettingsPath().parent_path(), ft::defaultSettingsPath().parent_path(),
+                          &migrateError))
+      std::fprintf(stderr, "moved settings and missions to %s\n",
+                   ft::pathToUtf8(ft::defaultSettingsPath().parent_path()).c_str());
+    else if (!migrateError.empty())
+      std::fprintf(stderr, "%s\n", migrateError.c_str());
+  }
   args.proto.settingsPath = args.settingsPath.empty() ? ft::defaultSettingsPath() : fs::path(args.settingsPath);
   // Mission history next to the settings file (a custom --settings keeps its missions with it).
   args.proto.missionsDir = !args.missionsDir.empty() ? fs::path(args.missionsDir)
@@ -138,7 +148,7 @@ int main(int argc, char** argv) {
   }
   // Window size is in points; Metal renders at the full Retina pixel density.
   const SDL_WindowFlags flags = SDL_WINDOW_METAL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-  SDL_Window* window = SDL_CreateWindow("AC8 Flight Telemetry \xE2\x80\x94 Prototype", args.width, args.height, flags);
+  SDL_Window* window = SDL_CreateWindow("AC8 G-Meter \xE2\x80\x94 Prototype", args.width, args.height, flags);
   if (!window) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
     return 1;

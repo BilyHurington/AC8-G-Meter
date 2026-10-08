@@ -258,9 +258,11 @@ bool saveSettings(const std::filesystem::path& path, const Settings& settings,
 
 std::filesystem::path defaultMissionsDir() { return defaultSettingsPath().parent_path() / "missions"; }
 
-std::filesystem::path defaultSettingsPath() {
+namespace {
+
+std::filesystem::path appSettingsPath(const char* appDirName) {
   namespace fs = std::filesystem;
-  const fs::path leaf = fs::path("AC8FlightTelemetry") / "settings.json";
+  const fs::path leaf = fs::path(appDirName) / "settings.json";
 #if defined(_WIN32)
   // Wide API: %APPDATA% contains the user name, which may not fit the ANSI code page.
   // _wdupenv_s also avoids the C4996 deprecation of getenv/_wgetenv.
@@ -281,6 +283,25 @@ std::filesystem::path defaultSettingsPath() {
   if (const char* home = std::getenv("HOME"); home && *home) return fs::path(home) / ".config" / leaf;
   return leaf;
 #endif
+}
+
+}  // namespace
+
+std::filesystem::path defaultSettingsPath() { return appSettingsPath(kAppDirName); }
+std::filesystem::path legacySettingsPath() { return appSettingsPath(kLegacyAppDirName); }
+
+bool migrateAppDir(const std::filesystem::path& from, const std::filesystem::path& to,
+                   std::string* error) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (fs::exists(to, ec) || !fs::is_directory(from, ec)) return false;
+  fs::create_directories(to.parent_path(), ec);
+  fs::rename(from, to, ec);  // same parent directory, so a cheap rename
+  if (ec) {
+    if (error) *error = "cannot move " + pathToUtf8(from) + " to " + pathToUtf8(to) + ": " + ec.message();
+    return false;
+  }
+  return true;
 }
 
 // --- SettingsStore ---------------------------------------------------------------------

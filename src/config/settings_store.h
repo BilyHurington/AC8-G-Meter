@@ -17,11 +17,21 @@ bool saveSettings(const std::filesystem::path& path, const Settings& settings,
 std::string settingsToJson(const Settings& settings);
 bool settingsFromJson(const std::string& json, Settings& out, std::string* error = nullptr);
 
+inline constexpr const char* kAppDirName = "AC8GMeter";
+// Directory name used before the project was renamed to AC8 G-Meter.
+inline constexpr const char* kLegacyAppDirName = "AC8FlightTelemetry";
+
 // Platform default location:
-//   macOS   ~/Library/Application Support/AC8FlightTelemetry/settings.json
-//   Windows %APPDATA%\AC8FlightTelemetry\settings.json (the UE4SS mod will pass its own path)
-//   other   $XDG_CONFIG_HOME or ~/.config/AC8FlightTelemetry/settings.json
+//   macOS   ~/Library/Application Support/AC8GMeter/settings.json
+//   Windows %APPDATA%\AC8GMeter\settings.json (the UE4SS mod will pass its own path)
+//   other   $XDG_CONFIG_HOME or ~/.config/AC8GMeter/settings.json
 std::filesystem::path defaultSettingsPath();
+// Same location under the legacy directory name.
+std::filesystem::path legacySettingsPath();
+// Moves the app directory `from` to `to` (settings and mission history together) when
+// `from` exists and `to` does not yet. Returns true if it moved; never throws.
+bool migrateAppDir(const std::filesystem::path& from, const std::filesystem::path& to,
+                   std::string* error = nullptr);
 // Mission archive (ft::MissionArchive) next to the default settings file: ".../missions".
 std::filesystem::path defaultMissionsDir();
 

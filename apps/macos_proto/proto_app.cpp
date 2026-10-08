@@ -199,7 +199,7 @@ void ProtoApp::setRecording(bool on) {
     recordStatus_ = "Cannot record: " + error;
     return;
   }
-  std::string comment = "recorded by ft_macos_proto, source=";
+  std::string comment = "recorded by ac8_gmeter_proto, source=";
   comment += sourceKind_ == SourceKind::Simulator ? scenarioName(sim_.options().scenario) : "replay";
   recorder_.writeComment(comment);
   recordStatus_.clear();
