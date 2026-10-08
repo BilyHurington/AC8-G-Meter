@@ -288,6 +288,10 @@ void ProtoApp::readouts() {
               static_cast<unsigned long long>(q.extremeG));
   ImGui::Text("resets: gap %llu  teleport %llu", static_cast<unsigned long long>(q.resetsGap),
               static_cast<unsigned long long>(q.resetsTeleport));
+  const FilterState& f = snap.filter;
+  ImGui::Text("input %.0f Hz  velocity noise %.3f m/s", f.sampleRateHz, f.velocityNoiseMS);
+  ImGui::Text("filter %s: window %.1f ms  tau %.1f ms  onset %.0f ms", f.adaptive ? "adaptive" : "fixed",
+              f.accelWindowS * 1000.0, f.smoothingTauS * 1000.0, f.onsetWindowS * 1000.0);
   if (snap.lastReport) ImGui::TextDisabled("last mission report: #%u", snap.lastReport->id);
 }
 

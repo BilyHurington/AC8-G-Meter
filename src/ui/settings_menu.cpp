@@ -34,7 +34,7 @@ void helpMarker(const char* text) {
 }  // namespace
 
 SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& editMode,
-                                      bool hasLastReport, double now) {
+                                      bool hasLastReport, const FilterState& filter, double now) {
   SettingsMenuResult r;
   if (!open) {
     capture_ = Capture::None;
@@ -56,7 +56,7 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   Settings& s = store.settings();
   ImGui::PushItemWidth(ImGui::GetFontSize() * 13.0f);
   overlaySection(s, editMode, r);
-  metricsSection(s, r);
+  metricsSection(s, filter, r);
   hotkeySection(s, r);
 
   sectionHeader("Mission summary");
@@ -131,7 +131,7 @@ void SettingsMenu::overlaySection(Settings& s, bool& editMode, SettingsMenuResul
   ImGui::EndDisabled();
 }
 
-void SettingsMenu::metricsSection(Settings& s, SettingsMenuResult& r) {
+void SettingsMenu::metricsSection(Settings& s, const FilterState& filter, SettingsMenuResult& r) {
   sectionHeader("Metrics");
   ImGui::TextDisabled("Shown on the overlay:");
   if (ImGui::BeginTable("##ft_metric_rows", 2)) {
@@ -155,8 +155,25 @@ void SettingsMenu::metricsSection(Settings& s, SettingsMenuResult& r) {
   }
   helpMarker("Nz is the load the pilot feels along the spine (negative when pushing). "
              "Total is the magnitude of the whole load-factor vector.");
+  pipe |= ImGui::Checkbox("Adaptive filtering", &m.adaptiveFiltering);
+  helpMarker("Auto window from data rate & noise: sizes the G filter from the measured data "
+             "rate and velocity noise. Clean or high-rate data gets a short window and much less "
+             "display delay, noisy data a longer one. Data without velocity always uses the fixed "
+             "filter. Turn off to set the smoothing by hand.");
+  ImGui::BeginDisabled(m.adaptiveFiltering);
   pipe |= ImGui::SliderFloat("Smoothing", &m.smoothingTauS, 0.0f, 1.0f, "tau %.2f s", ImGuiSliderFlags_AlwaysClamp);
-  helpMarker("Time constant of the G display filter. 0 = raw (after spike rejection).");
+  ImGui::EndDisabled();
+  helpMarker("Time constant of the G display filter. 0 = raw (after spike rejection). "
+             "Set automatically while adaptive filtering is on.");
+  if (m.adaptiveFiltering) {
+    if (filter.adaptive) {
+      ImGui::TextDisabled("Now: window %.0f ms, tau %.0f ms", filter.accelWindowS * 1000.0,
+                          filter.smoothingTauS * 1000.0);
+      ImGui::TextDisabled("     data %.0f Hz, noise %.3f m/s", filter.sampleRateHz, filter.velocityNoiseMS);
+    } else {
+      ImGui::TextDisabled("Now: fixed filter (no velocity data yet)");
+    }
+  }
   pipe |= ImGui::SliderFloat("High-G enter", &m.highGEnter, 2.0f, 12.0f, "%.1f G", ImGuiSliderFlags_AlwaysClamp);
   pipe |= ImGui::SliderFloat("High-G exit", &m.highGExit, 1.0f, m.highGEnter - 0.1f, "%.1f G",
                              ImGuiSliderFlags_AlwaysClamp);

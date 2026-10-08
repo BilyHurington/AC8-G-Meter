@@ -113,6 +113,7 @@ std::string settingsToJson(const Settings& s) {
         {"visible", visible}}},
       {"metrics",
        {{"g_mode", gModeKey(s.metrics.gMode)},
+        {"adaptive_filtering", s.metrics.adaptiveFiltering},
         {"smoothing_tau_s", s.metrics.smoothingTauS},
         {"high_g_enter", s.metrics.highGEnter},
         {"high_g_exit", s.metrics.highGExit}}},
@@ -158,6 +159,7 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
       if (mode == "total") out.metrics.gMode = GMode::Total;
       else if (mode == "nz") out.metrics.gMode = GMode::Nz;
     }
+    readBool(*m, "adaptive_filtering", out.metrics.adaptiveFiltering);
     readFloat(*m, "smoothing_tau_s", out.metrics.smoothingTauS);
     readFloat(*m, "high_g_enter", out.metrics.highGEnter);
     readFloat(*m, "high_g_exit", out.metrics.highGExit);

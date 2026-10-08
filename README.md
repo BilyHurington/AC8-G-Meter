@@ -100,6 +100,7 @@ src/config    设置模型与 JSON 持久化（宽松读取、范围钳制、原
 src/ui        仅依赖 Dear ImGui：HUD 叠加层、设置菜单、任务总结、布局计算
 apps/macos_proto  SDL3 + Metal 宿主：模拟的游戏画面和调试面板
 apps/replay_cli   无界面回放、统计、回归检查、日志生成
+apps/latency_bench  不同采样率与噪声下 G 显示延迟/误差基准（自适应 vs 固定滤波）
 tests/        doctest 测试
 data/replays  参考飞行日志
 assets/fonts  B612 Mono（SIL OFL 1.1）

@@ -13,19 +13,6 @@ using doctest::Approx;
 
 namespace {
 
-// Deterministic gaussian noise (Box-Muller on mt19937, whose output is fully specified;
-// std::normal_distribution's is implementation-defined).
-struct Gaussian {
-  std::mt19937 rng;
-  explicit Gaussian(std::uint32_t seed) : rng(seed) {}
-  double operator()(double sigma) {
-    const double u1 = (static_cast<double>(rng()) + 1.0) / 4294967297.0;
-    const double u2 = static_cast<double>(rng()) / 4294967296.0;
-    return sigma * std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * kPi * u2);
-  }
-  Vec3 vec(double sigma) { return {(*this)(sigma), (*this)(sigma), (*this)(sigma)}; }
-};
-
 // Flies `traj` against the truth `nz(t)` at a fixed rate and records the worst error after
 // `settleS` (and before `untilS`, if given).
 struct Run {

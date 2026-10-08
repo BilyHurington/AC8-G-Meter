@@ -74,7 +74,7 @@ void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float sc
   bool pipelineChanged = false;
   if (menuOpen_) {
     const SettingsMenuResult r =
-        d.menu.draw(store_, menuOpen_, editMode_, snapshot.lastReport != nullptr, now);
+        d.menu.draw(store_, menuOpen_, editMode_, snapshot.lastReport != nullptr, snapshot.filter, now);
     changed |= r.changed;
     pipelineChanged = r.pipelineChanged;
     if (r.showLastSummary && snapshot.lastReport) {

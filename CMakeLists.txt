@@ -42,6 +42,7 @@ target_link_libraries(ft_config  PUBLIC ft_core PRIVATE nlohmann_json::nlohmann_
 target_link_libraries(ft_ui      PUBLIC ft_core ft_config imgui)
 
 add_subdirectory(apps/replay_cli)
+add_subdirectory(apps/latency_bench)
 if(FT_BUILD_MACOS_PROTO)
   add_subdirectory(apps/macos_proto)
 endif()

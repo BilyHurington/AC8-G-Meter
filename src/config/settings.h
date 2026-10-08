@@ -64,7 +64,10 @@ struct OverlaySettings {
 
 struct MetricsSettings {
   GMode gMode = GMode::Nz;
-  float smoothingTauS = 0.05f;  // keep equal to PipelineConfig::smoothingTauS
+  // Window, EMA tau and onset window from the measured data rate and noise (see
+  // PipelineConfig::adaptiveFiltering). smoothingTauS applies when this is off.
+  bool adaptiveFiltering = true;  // keep equal to PipelineConfig::adaptiveFiltering
+  float smoothingTauS = 0.05f;    // keep equal to PipelineConfig::smoothingTauS
   float highGEnter = 6.0f;
   float highGExit = 5.5f;
   bool operator==(const MetricsSettings&) const = default;

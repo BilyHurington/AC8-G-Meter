@@ -44,6 +44,8 @@ TEST_CASE("settings defaults match the spec") {
   CHECK(s.hotkeys.toggleEditMode.toString() == "Ctrl+F9");
   CHECK(s.summary.autoShow);
   CHECK(s.metrics.gMode == GMode::Nz);
+  CHECK(s.metrics.adaptiveFiltering);
+  CHECK(s.metrics.adaptiveFiltering == PipelineConfig{}.adaptiveFiltering);
   CHECK(s.metrics.smoothingTauS == doctest::Approx(0.05));
 }
 
@@ -79,6 +81,7 @@ TEST_CASE("JSON round trip preserves every field") {
   s.overlay.backgroundAlpha = 0.6f;
   s.overlay.visible = {false, true, false, true, true, false, true, true};
   s.metrics.gMode = GMode::Total;
+  s.metrics.adaptiveFiltering = false;
   s.metrics.smoothingTauS = 0.3f;
   s.metrics.highGEnter = 7.5f;
   s.metrics.highGExit = 6.0f;
@@ -89,6 +92,7 @@ TEST_CASE("JSON round trip preserves every field") {
   const std::string json = settingsToJson(s);
   CHECK(json.find("\"#12AB7F\"") != std::string::npos);
   CHECK(json.find("\"Ctrl+Shift+Alt+K\"") != std::string::npos);
+  CHECK(json.find("\"adaptive_filtering\": false") != std::string::npos);
   Settings back;
   REQUIRE(settingsFromJson(json, back));
   CHECK(back == s);
@@ -109,7 +113,7 @@ TEST_CASE("partial and mistyped JSON keeps the other defaults") {
   Settings s;
   REQUIRE(settingsFromJson(R"({
     "overlay": { "pos_x": 0.5, "font_size_1080p": "big", "visible": { "aoa": true, "bogus": true } },
-    "metrics": { "g_mode": "total", "high_g_enter": null },
+    "metrics": { "g_mode": "total", "high_g_enter": null, "adaptive_filtering": "yes" },
     "unknown_section": { "x": 1 }
   })", s));
   Settings expected;
@@ -117,6 +121,7 @@ TEST_CASE("partial and mistyped JSON keeps the other defaults") {
   expected.overlay.visible[static_cast<int>(MetricId::Aoa)] = true;
   expected.metrics.gMode = GMode::Total;
   CHECK(s == expected);
+  CHECK(s.metrics.adaptiveFiltering);  // missing (older files) or mistyped -> default on
 }
 
 TEST_CASE("out-of-range values are clamped") {
@@ -246,6 +251,7 @@ TEST_CASE("SettingsStore debounces saves and restores defaults") {
 TEST_CASE("toPipelineConfig applies the user-tunable fields only") {
   Settings s;
   s.metrics.gMode = GMode::Total;
+  s.metrics.adaptiveFiltering = false;
   s.metrics.smoothingTauS = 0.25f;
   s.metrics.highGEnter = 8.0f;
   s.metrics.highGExit = 7.0f;
@@ -253,6 +259,7 @@ TEST_CASE("toPipelineConfig applies the user-tunable fields only") {
   base.maxGapS = 0.5;
   const PipelineConfig c = s.toPipelineConfig(base);
   CHECK(c.gMode == GMode::Total);
+  CHECK_FALSE(c.adaptiveFiltering);
   CHECK(c.smoothingTauS == doctest::Approx(0.25));
   CHECK(c.highGEnter == doctest::Approx(8.0));
   CHECK(c.highGExit == doctest::Approx(7.0));

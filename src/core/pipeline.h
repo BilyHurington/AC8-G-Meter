@@ -28,9 +28,28 @@ struct PipelineConfig {
   double accelWindowPositionOnlyS = 0.15;
   double onsetWindowS = 0.15;       // least-squares window for dG/dt
   double smoothingTauS = 0.05;      // EMA time constant applied to G (0 = off)
-  // Median filter length in *samples* (odd, 1 = off); removes single-sample spikes. Its
-  // delay is (N - 1) / 2 frames, so it depends on frame rate: ~33 ms at 60 fps for N = 5.
-  int medianWindow = 5;
+  // Adaptive filtering (velocity input). The acceleration is the least-squares slope of
+  // N = T / dt velocity samples over a window T, whose standard error with per-axis velocity
+  // noise sigma is sigma * sqrt(12 / (N T^2)). The window that keeps it at adaptiveTargetG:
+  //   T = cbrt(12 sigma^2 dt / (adaptiveTargetG * g0)^2), clamped to [2.5 dt, adaptiveMaxWindowS]
+  // with sigma and dt measured from the data (NoiseEstimator) and T smoothed over ~1 s. Clean
+  // or high-rate data gets a short window and little lag (clean 60 Hz: ~25 ms instead of
+  // ~105 ms with the fixed defaults); noisy data gets up to the clamp, as robust as the fixed
+  // windows. EMA tau = adaptiveTauRatio * T; onset window = adaptiveOnsetRatio * T within
+  // [4 dt, onsetWindowS]. accelWindowS and smoothingTauS are the fallback until the noise
+  // estimate is ready (~16 samples), and all three windows are used as-is when this is off.
+  // Position-only input always uses the fixed windows: its acceleration is a second
+  // derivative of noisy positions, whose noise follows a different law (~sigma_p / T^2.5)
+  // and is not measured by the velocity noise estimate.
+  bool adaptiveFiltering = true;
+  double adaptiveTargetG = 0.06;     // G noise (1 sigma per axis) the window is sized for
+  double adaptiveTauRatio = 0.4;
+  double adaptiveMaxWindowS = 0.12;
+  double adaptiveOnsetRatio = 3.0;
+  // Median filter length in *samples* (odd, 1 = off); removes isolated spikes from G. Off
+  // by default: the spike gate already removes glitches before the estimators, and a median
+  // of N adds (N - 1) / 2 frames of delay (~33 ms at 60 fps for N = 5).
+  int medianWindow = 1;
   double highGEnter = 6.0;          // sustained high-G episode starts at >= this
   double highGExit = 5.5;           // ... and ends below this (hysteresis)
   double maxGapS = 0.25;            // dt above this resets differentiators (hitch/pause)
@@ -70,8 +89,8 @@ class TelemetryPipeline {
   TelemetryPipeline(const TelemetryPipeline&) = delete;
   TelemetryPipeline& operator=(const TelemetryPipeline&) = delete;
 
-  // Applies new tuning. Filter state is reset only if a window/size parameter or the G
-  // mode changed. Mission statistics are preserved, except that a G mode change clears
+  // Applies new tuning. Filter state is reset only if a fixed window/size parameter or the
+  // G mode changed (not by the adaptive-filtering fields: windows trim by time). Mission statistics are preserved, except that a G mode change clears
   // the G-derived ones (extremes, onset, histogram, high-G, timeline) and the recent
   // history, since Nz and |n| values must not be mixed. Duration, max speed, max AoA and
   // sample counts are kept.

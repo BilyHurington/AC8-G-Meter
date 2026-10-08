@@ -10,6 +10,7 @@
 #include "core/high_g_timer.h"
 #include "core/kinematics.h"
 #include "core/mission_tracker.h"
+#include "core/noise_estimator.h"
 #include "core/sanitizer.h"
 
 namespace ft {
@@ -27,14 +28,20 @@ constexpr int kMaxConsecutiveSpikes = 3;
 constexpr double kPositionGateSigmas = 8.0;
 constexpr double kPositionGateFloorM = 1.0;
 // Velocity spike gate: besides spikeDeviationG * g0 * dt, a residual is tolerated up to
-// this many times the input's typical residual (mean |v - predicted| over recent accepted
-// samples). Per-step velocity noise grows into huge implied accelerations at high sample
-// rates (0.2 m/s of noise reads as ~30 G rms per axis at 1000 Hz), so a pure G threshold would
-// reject real samples there; this term keeps the gate above the noise at any rate. The
-// floor covers start-up, before the noise estimate exists.
-constexpr double kVelocityGateNoiseFactor = 6.0;
+// this many times the input's measured per-axis noise sigma. Per-step velocity noise grows
+// into huge implied accelerations at high sample rates (0.2 m/s of noise reads as ~30 G rms
+// per axis at 1000 Hz), so a pure G threshold would reject real samples there; this term
+// keeps the gate above the noise at any rate. The residual against the prediction has ~1.5
+// sigma per axis (new sample, newest sample, trend), so 15 sigma leaves a wide margin even
+// for heavy-tailed noise; game glitches are tens to hundreds of m/s. The floor covers
+// start-up, before the noise estimate exists.
+constexpr double kVelocityGateNoiseSigmas = 15.0;
 constexpr double kVelocityGateFloorMS = 1.0;
-constexpr double kVelocityNoiseAlpha = 0.02;  // per-sample EMA weight of the noise estimate
+// Adaptive filtering: the window never spans fewer than this many sample intervals, and
+// follows the ideal window from the noise estimate with this time constant (no jumps).
+constexpr double kAdaptiveMinWindowSamples = 2.5;
+constexpr double kAdaptiveOnsetMinSamples = 4.0;
+constexpr double kAdaptiveWindowTauS = 1.0;
 
 bool needsFilterReset(const PipelineConfig& a, const PipelineConfig& b) {
   return a.accelWindowS != b.accelWindowS ||
@@ -53,6 +60,11 @@ struct TelemetryPipeline::Impl {
   TimedWindow<Basis> attitudes;        // attitude history spanning the kinematics window
   std::array<Smoother, 3> bodySmooth;  // Nx, Ny, Nz; `g` is derived from these
   TimedWindow<double> onsetWindow;
+  // Velocity input noise and sample rate: a property of the source, so it survives estimator
+  // resets (cleared only by reset()). Shared by the spike gate and the adaptive windows.
+  NoiseEstimator noise;
+  double adaptiveWindowS = 0.0;  // smoothed ideal velocity window, 0 until the noise is known
+  FilterState filter;            // windows in use (published in the snapshot)
 
   HighGTimer highG;
   MissionTracker mission;
@@ -64,10 +76,6 @@ struct TelemetryPipeline::Impl {
   std::optional<Vec3> lastVel;
   bool resetPending = false;  // restart estimators on the next accepted sample
   int consecutiveSpikes = 0;
-  // Velocity input noise: mean |v - predicted| of accepted samples. A property of the source,
-  // so it survives estimator resets (cleared only by reset()).
-  double velocityResidualMean = 0.0;
-  int velocityResidualCount = 0;
 
   FlightMetrics current;
   MissionPhase phase = MissionPhase::None;
@@ -82,14 +90,12 @@ struct TelemetryPipeline::Impl {
   }
 
   void applyConfig(bool resize) {
-    kinematics.setWindows(cfg.accelWindowS, cfg.accelWindowPositionOnlyS);
     highG.setThresholds(cfg.highGEnter, cfg.highGExit);
     if (resize) {
       for (Smoother& s : bodySmooth) s.configure(cfg.medianWindow, cfg.smoothingTauS);
       resetEstimators();
-    } else {
-      for (Smoother& s : bodySmooth) s.setTau(cfg.smoothingTauS);
     }
+    selectWindows(lastVel.has_value(), 0.0);
   }
 
   void resetEstimators() {
@@ -97,6 +103,44 @@ struct TelemetryPipeline::Impl {
     attitudes.reset();
     for (Smoother& s : bodySmooth) s.reset();
     onsetWindow.reset();
+    noise.restartSequence();
+  }
+
+  // Chooses the filter windows for the next sample (see PipelineConfig::adaptiveFiltering).
+  // Only the windows change, never the estimator state: every window trims by time, so a
+  // new length simply applies from the next sample on.
+  void selectWindows(bool velocityInput, double stepDt) {
+    if (velocityInput && noise.ready() && noise.sampleInterval() > 0.0 && cfg.adaptiveTargetG > 0.0) {
+      const double dt = noise.sampleInterval();
+      const double sigma = noise.sigma();
+      const double target = cfg.adaptiveTargetG * kG0;
+      // The sample floor wins at very low rates (< ~21 Hz with the default clamp).
+      const double ideal = std::max(std::min(std::cbrt(12.0 * sigma * sigma * dt / (target * target)),
+                                             cfg.adaptiveMaxWindowS),
+                                    kAdaptiveMinWindowSamples * dt);
+      // Tracked even while adaptive filtering is off, so switching it on is seamless.
+      adaptiveWindowS = adaptiveWindowS > 0.0
+                            ? adaptiveWindowS + (1.0 - std::exp(-stepDt / kAdaptiveWindowTauS)) *
+                                                    (ideal - adaptiveWindowS)
+                            : ideal;
+    }
+    filter.sampleRateHz = noise.sampleInterval() > 0.0 ? 1.0 / noise.sampleInterval() : 0.0;
+    filter.velocityNoiseMS = noise.sigma();
+    filter.adaptive = cfg.adaptiveFiltering && velocityInput && adaptiveWindowS > 0.0;
+    if (filter.adaptive) {
+      const double dt = noise.sampleInterval();
+      filter.accelWindowS = adaptiveWindowS;
+      filter.smoothingTauS = cfg.adaptiveTauRatio * adaptiveWindowS;
+      filter.onsetWindowS = std::max(std::min(cfg.adaptiveOnsetRatio * adaptiveWindowS, cfg.onsetWindowS),
+                                     kAdaptiveOnsetMinSamples * dt);
+    } else {
+      filter.accelWindowS = velocityInput ? cfg.accelWindowS : cfg.accelWindowPositionOnlyS;
+      filter.smoothingTauS = cfg.smoothingTauS;
+      filter.onsetWindowS = cfg.onsetWindowS;
+    }
+    kinematics.setWindows(velocityInput ? filter.accelWindowS : cfg.accelWindowS,
+                          cfg.accelWindowPositionOnlyS);
+    for (Smoother& s : bodySmooth) s.setTau(filter.smoothingTauS);
   }
 
   // G mode changed: old and new `g` values are different quantities and must not share
@@ -170,12 +214,12 @@ struct TelemetryPipeline::Impl {
   //   velocity input: the distance of the new velocity from the one predicted by the last
   //     sample and the current acceleration trend, against the larger of
   //     spikeDeviationG * g0 * dt (an acceleration change no aircraft makes in one step)
-  //     and a multiple of the input's measured residual noise.
+  //     and a multiple of the input's measured velocity noise (NoiseEstimator).
   //   position only : the distance from where the window's quadratic fit predicts the
   //     aircraft, against a threshold scaled to the fit's residual noise. (A two-point
   //     second difference would amplify position noise by ~4 / dt^2: 1 cm of jitter
   //     reads as ~15 G at 60 fps.)
-  // The median filter then handles smaller isolated outliers in the G signal.
+  // The median filter (if enabled) then handles smaller isolated outliers in the G signal.
   bool isSpike(const RawFlightSample& s, double dt) const {
     if (!s.velocity) {
       const std::optional<Vec3> predicted = kinematics.predictPosition(s.t);
@@ -187,19 +231,9 @@ struct TelemetryPipeline::Impl {
     const std::optional<Vec3> predicted = kinematics.predictVelocity(s.t);
     if (!predicted) return false;
     const double limit = std::max({cfg.spikeDeviationG * kG0 * dt,
-                                   kVelocityGateNoiseFactor * velocityResidualMean,
+                                   kVelocityGateNoiseSigmas * noise.sigma(),
                                    kVelocityGateFloorMS});
     return length(*s.velocity - *predicted) > limit;
-  }
-
-  // Feeds the velocity noise estimate with an accepted sample (before it enters the window).
-  void updateVelocityNoise(const RawFlightSample& s) {
-    if (!s.velocity) return;
-    const std::optional<Vec3> predicted = kinematics.predictVelocity(s.t);
-    if (!predicted) return;  // no trend yet (first sample after a reset)
-    ++velocityResidualCount;
-    const double alpha = std::max(1.0 / velocityResidualCount, kVelocityNoiseAlpha);
-    velocityResidualMean += alpha * (length(*s.velocity - *predicted) - velocityResidualMean);
   }
 
   // Position jump inconsistent with the motion (respawn, checkpoint). Position-only input
@@ -278,7 +312,8 @@ struct TelemetryPipeline::Impl {
     consecutiveSpikes = 0;
     const double stepDt = std::max(dt, 0.0);  // negative only on a clock restart
 
-    updateVelocityNoise(s);
+    if (s.velocity) noise.add(s.t, *s.velocity);
+    selectWindows(s.velocity.has_value(), stepDt);
     kinematics.add(s.t, s.position, s.velocity);
     attitudes.push(s.t, s.attitude);
     attitudes.trim(kinematics.windowS(), KinematicsEstimator::kMinPoints);
@@ -312,7 +347,7 @@ struct TelemetryPipeline::Impl {
       m.g = cfg.gMode == GMode::Nz ? m.loadFactorBody.z : m.gTotal;
 
       onsetWindow.push(s.t, m.g);
-      onsetWindow.trim(cfg.onsetWindowS, kMinOnsetPoints);
+      onsetWindow.trim(filter.onsetWindowS, kMinOnsetPoints);
       m.onsetRate = onsetWindow.slope();
       m.valid = onsetWindow.size() >= kMinOnsetPoints;
     }
@@ -374,8 +409,9 @@ struct TelemetryPipeline::Impl {
     hasLast = false;
     resetPending = false;
     consecutiveSpikes = 0;
-    velocityResidualMean = 0.0;
-    velocityResidualCount = 0;
+    noise.reset();
+    adaptiveWindowS = 0.0;
+    selectWindows(false, 0.0);
     for (std::size_t i = 0; i < consumers.size(); ++i) consumers[i]->onReset();
   }
 };
@@ -407,6 +443,7 @@ MetricsSnapshot TelemetryPipeline::snapshot() const {
   snap.lastReport = impl_->lastReport;
   snap.recent = impl_->recent;
   snap.quality = impl_->quality;
+  snap.filter = impl_->filter;
   return snap;
 }
 

@@ -45,14 +45,14 @@ TEST_CASE("sustained high-G episodes: G hovering between exit and enter does not
   RecordingConsumer c;
   p.addConsumer(&c);
   const double t1 = fly(p, prof.trajectory(), 0.0, 4.0);
-  // G crosses 6.0 at t = 1.45; the filtered value follows ~0.13 s later (LS window,
-  // median and EMA lag), so the episode clock starts at ~1.58 s.
+  // G crosses 6.0 at t = 1.45; the filtered value follows ~0.04 s later (clean data: short
+  // adaptive LS window and EMA), so the episode clock starts at ~1.49 s.
   CHECK(c.last.inHighG);
-  CHECK(c.last.highGDurationS == Approx(4.0 - 1.58).epsilon(0.01));
+  CHECK(c.last.highGDurationS == Approx(4.0 - 1.49).epsilon(0.01));
   fly(p, prof.trajectory(), t1, 9.0);
   const MissionStats& s = p.snapshot().mission;
   CHECK(s.highGEpisodes == 1);
-  CHECK(s.longestHighGS == Approx(6.0 - 1.58).epsilon(0.01));
+  CHECK(s.longestHighGS == Approx(6.0 - 1.49).epsilon(0.01));
   CHECK(s.totalHighGS == Approx(s.longestHighGS).epsilon(1e-6));
   CHECK_FALSE(c.last.inHighG);
   CHECK(c.last.highGDurationS == 0.0);

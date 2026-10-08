@@ -99,6 +99,16 @@ struct DataQuality {
   std::uint64_t resetsTeleport = 0;      // position jump inconsistent with velocity -> reset
 };
 
+// The filter windows in use right now (see PipelineConfig::adaptiveFiltering).
+struct FilterState {
+  double sampleRateHz = 0.0;     // measured input rate (velocity input), 0 until known
+  double velocityNoiseMS = 0.0;  // measured per-axis velocity noise sigma, m/s
+  double accelWindowS = 0.0;     // least-squares acceleration window
+  double smoothingTauS = 0.0;    // EMA time constant on G
+  double onsetWindowS = 0.0;     // least-squares window for the onset rate
+  bool adaptive = false;         // windows follow rate and noise (else the fixed config values)
+};
+
 // Everything the UI needs for one frame.
 struct MetricsSnapshot {
   FlightMetrics current;
@@ -107,6 +117,7 @@ struct MetricsSnapshot {
   std::shared_ptr<const MissionReport> lastReport;  // most recent completed mission, or null
   RecentHistory recent;
   DataQuality quality;
+  FilterState filter;
 };
 
 }  // namespace ft

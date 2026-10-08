@@ -103,6 +103,7 @@ void Settings::clamp() {
 
 PipelineConfig Settings::toPipelineConfig(PipelineConfig base) const {
   base.gMode = metrics.gMode;
+  base.adaptiveFiltering = metrics.adaptiveFiltering;
   base.smoothingTauS = metrics.smoothingTauS;
   base.highGEnter = metrics.highGEnter;
   base.highGExit = metrics.highGExit;
