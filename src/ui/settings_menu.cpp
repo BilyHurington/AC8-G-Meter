@@ -96,7 +96,7 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   else if (store.dirty() || r.changed) ImGui::TextColored(kWarn, "Saving...");
   else ImGui::TextColored(kAccent, "All changes saved");
   ImGui::PushTextWrapPos(0.0f);
-  ImGui::TextDisabled("%s", store.path().string().c_str());
+  ImGui::TextDisabled("%s", pathToUtf8(store.path()).c_str());
   ImGui::PopTextWrapPos();
 
   ImGui::End();

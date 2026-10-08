@@ -2,6 +2,7 @@
 // Everything the prototype does per frame, independent of SDL / Metal (main.mm owns those):
 // telemetry source -> pipeline -> LatestValue snapshot -> fake game scene + TelemetryUi +
 // debug panel.
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -65,6 +66,10 @@ class ProtoApp {
   TelemetryUi ui_;
   TelemetryPipeline pipeline_;
   LatestValue<MetricsSnapshot> latest_;  // pipeline -> UI hand-off (game -> render thread in-game)
+  // UI -> pipeline hand-off (render -> game thread in-game). The UI never touches pipeline_.
+  LatestValue<PipelineConfig> pendingConfig_;
+  std::uint64_t appliedConfigVersion_ = 0;
+  const PipelineConfig baseConfig_{};  // non-user-tunable pipeline parameters
 
   SourceKind sourceKind_ = SourceKind::Simulator;
   SimulatedSourceOptions simOptions_;

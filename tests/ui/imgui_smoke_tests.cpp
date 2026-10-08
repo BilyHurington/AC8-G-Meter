@@ -128,21 +128,43 @@ TEST_CASE("headless frames: overlay, menu, summary, edit-mode drag, extra layers
   ui.onSettingsChanged = [&](const Settings&) { ++pipelineChanges; };
 
   double now = 0.0;
+  ImGuiIO& io = ImGui::GetIO();
   const MetricsSnapshot noReport = fakeSnapshot(0);
   for (int i = 0; i < 5; ++i) im.frame(ui, noReport, now += 1.0 / 60.0);
   CHECK(extraDraws == 5);
   CHECK_FALSE(ui.wantsInput());  // normal overlay mode never captures input
 
-  // A finished mission pops the summary (autoShow defaults to on).
+  // Normal mode, mouse over the HUD text and clicking: the game keeps the mouse.
+  const OverlayLayout hud = computeOverlayLayout(store.settings().overlay, 1920.0f, 1080.0f);
+  io.AddMousePosEvent(hud.x + 10.0f, hud.y + 5.0f);
+  im.frame(ui, noReport, now += 1.0 / 60.0);
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+  im.frame(ui, noReport, now += 1.0 / 60.0);
+  CHECK_FALSE(io.WantCaptureMouse);
+  CHECK_FALSE(ui.wantsInput());
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+  im.frame(ui, noReport, now += 1.0 / 60.0);
+
+  // A finished mission pops the summary (autoShow defaults to on). It does not capture
+  // input while the mouse is elsewhere (the game's results screen stays usable)...
   const MetricsSnapshot withReport = fakeSnapshot(1);
+  io.AddMousePosEvent(10.0f, 1070.0f);
   for (int i = 0; i < 3; ++i) im.frame(ui, withReport, now += 1.0 / 60.0);
+  CHECK(ui.summaryOpen());
+  CHECK_FALSE(ui.wantsInput());
+  // ...only while the mouse is over it (it opens centered on the screen).
+  io.AddMousePosEvent(960.0f, 540.0f);
+  im.frame(ui, withReport, now += 1.0 / 60.0);
   CHECK(ui.wantsInput());
+  io.AddMousePosEvent(10.0f, 1070.0f);
+  im.frame(ui, withReport, now += 1.0 / 60.0);
+  CHECK_FALSE(ui.wantsInput());
+
   ui.showSummary(false);
   im.frame(ui, withReport, now += 1.0 / 60.0);
-  CHECK_FALSE(ui.wantsInput());  // same report id does not reopen it
+  CHECK_FALSE(ui.summaryOpen());  // same report id does not reopen it
 
   // Ctrl+F8 toggles the settings menu.
-  ImGuiIO& io = ImGui::GetIO();
   io.AddKeyEvent(ImGuiMod_Ctrl, true);
   io.AddKeyEvent(ImGuiKey_F8, true);
   im.frame(ui, withReport, now += 1.0 / 60.0);
@@ -207,4 +229,65 @@ TEST_CASE("headless frames: overlay, menu, summary, edit-mode drag, extra layers
   for (int i = 0; i < 3; ++i) im.frame(ui, second, now += 1.0 / 60.0);
   CHECK(ui.wantsInput());
   CHECK(pipelineChanges == 0);  // nothing pipeline-related was edited
+}
+
+TEST_CASE("aborted missions do not pop the summary") {
+  HeadlessImGui im;
+  SettingsStore store(tmpSettings("aborted.json"));
+  TelemetryUi ui(store);
+  REQUIRE(ui.loadFonts(FT_SOURCE_DIR "/assets/fonts/B612Mono-Regular.ttf"));
+  double now = 0.0;
+
+  MetricsSnapshot aborted = fakeSnapshot(1);
+  auto report = std::make_shared<MissionReport>(*aborted.lastReport);
+  report->aborted = true;
+  aborted.lastReport = report;
+  for (int i = 0; i < 3; ++i) im.frame(ui, aborted, now += 1.0 / 60.0);
+  CHECK_FALSE(ui.summaryOpen());
+  CHECK_FALSE(ui.wantsInput());
+
+  // Still reachable on demand ("Show last mission" does the same).
+  ui.showSummary(true);
+  im.frame(ui, aborted, now += 1.0 / 60.0);
+  CHECK(ui.summaryOpen());
+  ui.showSummary(false);
+
+  // The next completed mission pops as usual.
+  for (int i = 0; i < 3; ++i) im.frame(ui, fakeSnapshot(2), now += 1.0 / 60.0);
+  CHECK(ui.summaryOpen());
+}
+
+TEST_CASE("leaving edit mode mid-drag keeps the dragged position") {
+  HeadlessImGui im;
+  SettingsStore store(tmpSettings("middrag.json"));
+  TelemetryUi ui(store);
+  REQUIRE(ui.loadFonts(FT_SOURCE_DIR "/assets/fonts/B612Mono-Regular.ttf"));
+  ImGuiIO& io = ImGui::GetIO();
+  const MetricsSnapshot snap = fakeSnapshot(0);
+  double now = 0.0;
+
+  ui.setEditMode(true);
+  const OverlayLayout before = computeOverlayLayout(store.settings().overlay, 1920.0f, 1080.0f);
+  io.AddMousePosEvent(before.x + 10.0f, before.y + 5.0f);
+  im.frame(ui, snap, now += 1.0 / 60.0);
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+  im.frame(ui, snap, now += 1.0 / 60.0);
+  io.AddMousePosEvent(before.x + 160.0f, before.y + 85.0f);
+  im.frame(ui, snap, now += 1.0 / 60.0);
+
+  // Ctrl+F9 while the button is still held.
+  io.AddKeyEvent(ImGuiMod_Ctrl, true);
+  io.AddKeyEvent(ImGuiKey_F9, true);
+  im.frame(ui, snap, now += 1.0 / 60.0);
+  io.AddKeyEvent(ImGuiKey_F9, false);
+  io.AddKeyEvent(ImGuiMod_Ctrl, false);
+  im.frame(ui, snap, now += 1.0 / 60.0);
+  CHECK_FALSE(ui.editMode());
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+  im.frame(ui, snap, now += 1.0 / 60.0);
+
+  const OverlayLayout after = computeOverlayLayout(store.settings().overlay, 1920.0f, 1080.0f);
+  CHECK(after.x == doctest::Approx(before.x + 150.0f).epsilon(0.01));
+  CHECK(after.y == doctest::Approx(before.y + 80.0f).epsilon(0.01));
+  CHECK(store.dirty());
 }

@@ -8,7 +8,7 @@
 
 namespace ft {
 
-inline constexpr const char* kDegreeSign = "\xC2\xB0";  // UTF-8 '°' (present in B612 Mono)
+inline constexpr const char* kDegreeSign = "\xC2\xB0";  // UTF-8 '°' (in B612 Mono and ImGui's default fonts)
 inline constexpr double kMsToKmh = 3.6;
 inline constexpr int kHudLabelWidth = 6;  // label column, values start at column 6
 

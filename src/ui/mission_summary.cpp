@@ -37,7 +37,7 @@ void statsTable(const MissionStats& st) {
   row("Min G", formatNumber(st.minG, 1, true) + " G", at(st.minGAtS));
   row("Max onset", formatNumber(st.maxOnset, 1, true) + " G/s");
   row("Max unload", formatNumber(st.minOnset, 1, true) + " G/s");
-  row("Max AoA", formatNumber(st.maxAoaDeg, 1, false) + " deg");
+  row("Max AoA", formatNumber(st.maxAoaDeg, 1, false) + kDegreeSign);
   row("Max speed", formatSpeedKmh(st.maxSpeed));
   row("Longest high-G", formatNumber(st.longestHighGS, 1, false) + " s");
   char buf[64];
@@ -110,8 +110,10 @@ void drawMissionSummary(const MissionReport& report, const Settings& settings, b
   ImGui::SetNextWindowBgAlpha(1.0f);   // readable over a busy results screen
   char title[64];
   std::snprintf(title, sizeof title, "Mission %u summary###ft_summary", report.id);
+  // NoFocusOnAppearing: popping up at mission end must not take keyboard focus from the game.
   if (!ImGui::Begin(title, &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse |
-                                      ImGuiWindowFlags_AlwaysAutoResize)) {
+                                      ImGuiWindowFlags_AlwaysAutoResize |
+                                      ImGuiWindowFlags_NoFocusOnAppearing)) {
     ImGui::End();
     return;
   }

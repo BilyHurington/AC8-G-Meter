@@ -14,7 +14,8 @@ namespace ft {
 
 class HudOverlayLayer final : public IOverlayLayer {
  public:
-  static constexpr double kRefreshPeriodS = 0.1;  // text refresh rate (10 Hz): readable digits
+  // Text refresh period (30 Hz): caps digit flicker without adding visible latency.
+  static constexpr double kRefreshPeriodS = 1.0 / 30.0;
 
   void setFont(ImFont* font) { font_ = font; }  // nullptr -> current ImGui font
   const char* name() const override { return "hud"; }
@@ -32,6 +33,7 @@ class HudOverlayLayer final : public IOverlayLayer {
   bool dragging_ = false;
   float dragStartX_ = 0.0f, dragStartY_ = 0.0f;  // text origin when the drag began, px
   float dragX_ = 0.0f, dragY_ = 0.0f;            // current (clamped) drag position, px
+  float dragW_ = 0.0f, dragH_ = 0.0f;            // text block size during the drag, px
 };
 
 }  // namespace ft

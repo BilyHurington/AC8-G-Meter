@@ -49,7 +49,14 @@ void HudOverlayLayer::refreshLines(const OverlayFrame& f) {
 bool HudOverlayLayer::draw(OverlayFrame& f) {
   refreshLines(f);
   OverlaySettings& o = f.settings.overlay;
-  if (lines_.empty() && !f.editMode) return false;
+  bool modified = false;
+  if (dragging_ && !f.editMode) {
+    // Edit mode was turned off mid-drag (hotkey with the button still down): keep the position.
+    storeOverlayPosition(o, dragX_, dragY_, dragW_, dragH_, f.screenW, f.screenH);
+    dragging_ = false;
+    modified = true;
+  }
+  if (lines_.empty() && !f.editMode) return modified;
 
   ImFont* font = font_ ? font_ : ImGui::GetFont();
   const OverlayLayout layout = computeOverlayLayout(o, f.screenW, f.screenH);
@@ -67,7 +74,6 @@ bool HudOverlayLayer::draw(OverlayFrame& f) {
   // Keep the whole block on screen (e.g. after a font-size increase near an edge).
   auto clampX = [&](float x) { return std::clamp(x, 0.0f, std::max(0.0f, f.screenW - textW)); };
   auto clampY = [&](float y) { return std::clamp(y, 0.0f, std::max(0.0f, f.screenH - textH)); };
-  if (!f.editMode) dragging_ = false;
   const float originX = dragging_ ? dragX_ : clampX(layout.x);
   const float originY = dragging_ ? dragY_ : clampY(layout.y);
 
@@ -116,7 +122,6 @@ bool HudOverlayLayer::draw(OverlayFrame& f) {
     dl->AddText(font, layout.fontPx, p, textCol, text);
   }
 
-  bool modified = false;
   if (f.editMode) {
     ImGui::SetCursorScreenPos(winPos);
     ImGui::InvisibleButton("##ft_hud_drag", winSize);
@@ -131,6 +136,8 @@ bool HudOverlayLayer::draw(OverlayFrame& f) {
         const ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.0f);
         dragX_ = clampX(dragStartX_ + delta.x);
         dragY_ = clampY(dragStartY_ + delta.y);
+        dragW_ = textW;
+        dragH_ = textH;
       } else if (dragging_) {
         // Released: persist as normalized coordinates so it follows resolution changes.
         storeOverlayPosition(o, dragX_, dragY_, textW, textH, f.screenW, f.screenH);

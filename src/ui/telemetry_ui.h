@@ -21,20 +21,25 @@ class TelemetryUi {
   ~TelemetryUi();
 
   // Call once after ImGui::CreateContext(), before the first frame. Loads the HUD font
-  // (falls back to ImGui's default font if the file is missing). Returns false on fallback.
+  // (UTF-8 path; falls back to ImGui's default font if the file is missing). Returns false
+  // on fallback.
   bool loadFonts(const std::string& hudFontPath);
 
   // Handles hotkeys and draws all layers. `now` = monotonic seconds (for auto-save debounce).
   void frame(const MetricsSnapshot& snapshot, float screenW, float screenH, double now);
 
-  // True when the UI needs the mouse/keyboard (menu open or edit mode). Hosts forward
-  // input to the game only when this is false. Normal overlay mode never captures input.
+  // True when the UI needs the mouse/keyboard: the menu is open, edit mode is on, or the
+  // mouse is over / interacting with the mission summary. Hosts forward input to the game
+  // only when this is false. Normal overlay mode never captures input, and the auto-shown
+  // summary does not block the game (e.g. the results screen) unless the mouse is on it.
+  // Reads ImGui's io.WantCaptureMouse, so call it while the ImGui context is current.
   bool wantsInput() const;
 
   bool menuOpen() const { return menuOpen_; }
   void setMenuOpen(bool open) { menuOpen_ = open; }
   bool editMode() const { return editMode_; }
   void setEditMode(bool on) { editMode_ = on; }
+  bool summaryOpen() const { return summaryOpen_; }
   void showSummary(bool show) { summaryOpen_ = show; }
 
   // Invoked after any setting that affects the pipeline changes (apply via toPipelineConfig).

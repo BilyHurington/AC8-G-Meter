@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -21,7 +22,11 @@ using nlohmann::json;
 
 void readFloat(const json& obj, const char* key, float& out) {
   const auto it = obj.find(key);
-  if (it != obj.end() && it->is_number()) out = it->get<float>();
+  if (it == obj.end() || !it->is_number()) return;
+  // Read as double first: converting an out-of-range double straight to float is UB.
+  // The real per-field ranges are applied afterwards by Settings::clamp().
+  const double v = it->get<double>();
+  if (std::isfinite(v)) out = static_cast<float>(std::clamp(v, -1.0e6, 1.0e6));
 }
 
 void readBool(const json& obj, const char* key, bool& out) {
@@ -72,6 +77,19 @@ const char* gModeKey(GMode m) { return m == GMode::Total ? "total" : "nz"; }
 
 }  // namespace
 
+std::string pathToUtf8(const std::filesystem::path& path) {
+  // path::string() converts to the ANSI code page on Windows and throws for characters
+  // outside it; u8string() is lossless. C++20 returns std::u8string, so copy the bytes.
+  // Called from per-frame UI code, so it must not throw (u8string() can, for ill-formed
+  // UTF-16 such as an unpaired surrogate in a Windows file name).
+  try {
+    const std::u8string u8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+  } catch (const std::exception&) {
+    return "(path not representable as UTF-8)";
+  }
+}
+
 std::string settingsToJson(const Settings& s) {
   json visible = json::object();
   for (int i = 0; i < kMetricCount; ++i)
@@ -103,7 +121,8 @@ std::string settingsToJson(const Settings& s) {
         {"toggle_edit_mode", s.hotkeys.toggleEditMode.toString()}}},
       {"summary", {{"auto_show", s.summary.autoShow}}},
   };
-  return root.dump(2) + "\n";
+  // error_handler_t::replace: never throws on invalid UTF-8 (this runs from the UI frame).
+  return root.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
 }
 
 bool settingsFromJson(const std::string& text, Settings& out, std::string* error) {
@@ -157,7 +176,7 @@ bool loadSettings(const std::filesystem::path& path, Settings& out, std::string*
   out = Settings{};
   std::ifstream in(path, std::ios::binary);
   if (!in) {
-    if (error) *error = "cannot open " + path.string();
+    if (error) *error = "cannot open " + pathToUtf8(path);
     return false;
   }
   std::ostringstream buf;
@@ -172,7 +191,7 @@ bool saveSettings(const std::filesystem::path& path, const Settings& settings,
   if (path.has_parent_path()) {
     fs::create_directories(path.parent_path(), ec);
     if (ec) {
-      if (error) *error = "cannot create " + path.parent_path().string() + ": " + ec.message();
+      if (error) *error = "cannot create " + pathToUtf8(path.parent_path()) + ": " + ec.message();
       return false;
     }
   }
@@ -181,21 +200,22 @@ bool saveSettings(const std::filesystem::path& path, const Settings& settings,
   {
     std::ofstream outFile(tmp, std::ios::binary | std::ios::trunc);
     if (!outFile) {
-      if (error) *error = "cannot write " + tmp.string();
+      if (error) *error = "cannot write " + pathToUtf8(tmp);
       return false;
     }
     outFile << settingsToJson(settings);
     outFile.flush();
     if (!outFile) {
-      if (error) *error = "write failed: " + tmp.string();
+      if (error) *error = "write failed: " + pathToUtf8(tmp);
       return false;
     }
   }
   // rename() replaces the target atomically on POSIX and via MoveFileEx on Windows, so a
-  // crash mid-save never leaves a truncated settings file behind.
+  // crash mid-save never leaves a truncated settings file behind. There is no fsync: after a
+  // power loss the file may revert to the previous version, which is fine for settings.
   fs::rename(tmp, path, ec);
   if (ec) {
-    if (error) *error = "cannot replace " + path.string() + ": " + ec.message();
+    if (error) *error = "cannot replace " + pathToUtf8(path) + ": " + ec.message();
     fs::remove(tmp, ec);
     return false;
   }
@@ -206,9 +226,16 @@ std::filesystem::path defaultSettingsPath() {
   namespace fs = std::filesystem;
   const fs::path leaf = fs::path("AC8FlightTelemetry") / "settings.json";
 #if defined(_WIN32)
-  // getenv is fine here: called once at startup, single-threaded.
-  if (const char* appData = std::getenv("APPDATA"); appData && *appData) return fs::path(appData) / leaf;
-  return leaf;
+  // Wide API: %APPDATA% contains the user name, which may not fit the ANSI code page.
+  // _wdupenv_s also avoids the C4996 deprecation of getenv/_wgetenv.
+  fs::path result = leaf;
+  wchar_t* appData = nullptr;
+  std::size_t len = 0;
+  if (_wdupenv_s(&appData, &len, L"APPDATA") == 0 && appData) {
+    if (*appData) result = fs::path(appData) / leaf;
+    std::free(appData);
+  }
+  return result;
 #elif defined(__APPLE__)
   if (const char* home = std::getenv("HOME"); home && *home)
     return fs::path(home) / "Library" / "Application Support" / leaf;

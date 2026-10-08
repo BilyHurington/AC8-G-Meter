@@ -23,6 +23,10 @@ bool settingsFromJson(const std::string& json, Settings& out, std::string* error
 //   other   $XDG_CONFIG_HOME or ~/.config/AC8FlightTelemetry/settings.json
 std::filesystem::path defaultSettingsPath();
 
+// UTF-8 text for showing a path in ImGui or an error message. Never use path::string() for
+// that: on Windows it throws for characters outside the ANSI code page.
+std::string pathToUtf8(const std::filesystem::path& path);
+
 class SettingsStore {
  public:
   explicit SettingsStore(std::filesystem::path path, double debounceS = 0.5);

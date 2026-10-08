@@ -17,9 +17,11 @@ ProtoApp::ProtoApp(ProtoConfig config)
   store_.load();
   if (!store_.lastError().empty())
     std::fprintf(stderr, "settings: %s (using defaults)\n", store_.lastError().c_str());
-  pipeline_.setConfig(store_.settings().toPipelineConfig());
+  pipeline_.setConfig(store_.settings().toPipelineConfig(baseConfig_));
+  // Mirrors the in-game threading: the UI (render thread) only publishes the new config;
+  // update() (game thread) applies it before pushing the next samples.
   ui_.onSettingsChanged = [this](const Settings& s) {
-    pipeline_.setConfig(s.toPipelineConfig(pipeline_.config()));
+    pendingConfig_.publish(s.toPipelineConfig(baseConfig_));
   };
 
   if (config_.scenario) simOptions_.scenario = *config_.scenario;
@@ -36,12 +38,12 @@ ProtoApp::~ProtoApp() { shutdown(); }
 void ProtoApp::initImGui() {
   applyTelemetryStyle(ImGui::GetStyle());
   const auto fonts = config_.assetsDir / "fonts";
-  if (!ui_.loadFonts((fonts / "B612Mono-Regular.ttf").string()))
-    std::fprintf(stderr, "HUD font not found in %s, using ImGui's default font\n", fonts.string().c_str());
+  if (!ui_.loadFonts(pathToUtf8(fonts / "B612Mono-Regular.ttf")))
+    std::fprintf(stderr, "HUD font not found in %s, using ImGui's default font\n", pathToUtf8(fonts).c_str());
   // The mock game HUD uses the bold cut so it is distinguishable from the telemetry overlay.
   ImFontConfig cfg;
   cfg.Flags |= ImFontFlags_NoLoadError;
-  scene_.setFont(ImGui::GetIO().Fonts->AddFontFromFileTTF((fonts / "B612Mono-Bold.ttf").string().c_str(), 0.0f, &cfg));
+  scene_.setFont(ImGui::GetIO().Fonts->AddFontFromFileTTF(pathToUtf8(fonts / "B612Mono-Bold.ttf").c_str(), 0.0f, &cfg));
 }
 
 ITelemetrySource& ProtoApp::source() {
@@ -54,6 +56,10 @@ void ProtoApp::update(double realDtS) {
   const bool isSim = sourceKind_ == SourceKind::Simulator;
   if (isSim && sim_.options().scenario == Scenario::Manual) sim_.setManualInput(manual_);
   source().poll(realDtS, samples_);
+
+  // Apply settings published by the UI since the last update (UI -> game-thread hand-off).
+  if (PipelineConfig config; pendingConfig_.readIfNewer(appliedConfigVersion_, config))
+    pipeline_.setConfig(config);
 
   for (std::size_t i = 0; i < samples_.size(); ++i) {
     const RawFlightSample& s = samples_[i];
@@ -122,10 +128,13 @@ void ProtoApp::draw(float screenW, float screenH, double now) {
   }
   scene_.draw(ImGui::GetBackgroundDrawList(), screenW, screenH, st, now);
 
-  // Input the overlay does not capture belongs to the "game".
-  if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
+  // Input the overlay does not capture belongs to the "game". wantsInput() is what the mod
+  // will use to decide whether to block game input; ImGui's WantCapture flags additionally
+  // cover the prototype's debug panel. Values are from the previous UI frame, as in-game.
+  const bool uiWantsInput = ui_.wantsInput();
+  if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse && !uiWantsInput)
     scene_.registerClick(io.MousePos.x, io.MousePos.y, now);
-  if (!io.WantCaptureKeyboard) applyManualFlying(static_cast<double>(io.DeltaTime));
+  if (!io.WantCaptureKeyboard && !uiWantsInput) applyManualFlying(static_cast<double>(io.DeltaTime));
 
   ui_.frame(snap, screenW, screenH, now);
   if (debugOpen_) drawDebugPanel(screenW, screenH);

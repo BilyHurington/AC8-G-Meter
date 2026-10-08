@@ -9,7 +9,7 @@ namespace ft {
 namespace {
 
 // Spelling must match ImGui::GetKeyName() (verified by the UI tests).
-constexpr std::array<std::string_view, 82> kKeyNames{
+constexpr auto kKeyNames = std::to_array<std::string_view>({
     "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
     "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
@@ -21,7 +21,7 @@ constexpr std::array<std::string_view, 82> kKeyNames{
     "Keypad5", "Keypad6", "Keypad7", "Keypad8", "Keypad9",
     "KeypadDecimal", "KeypadDivide", "KeypadMultiply", "KeypadSubtract", "KeypadAdd",
     "GraveAccent", "Minus", "Equal",
-};
+});
 
 bool iequals(std::string_view a, std::string_view b) {
   return a.size() == b.size() &&

@@ -46,7 +46,9 @@ void TelemetryUi::addLayer(std::unique_ptr<IOverlayLayer> layer) {
   if (layer) impl_->layers.push_back(std::move(layer));
 }
 
-bool TelemetryUi::wantsInput() const { return menuOpen_ || editMode_ || summaryOpen_; }
+bool TelemetryUi::wantsInput() const {
+  return menuOpen_ || editMode_ || (summaryOpen_ && ImGui::GetIO().WantCaptureMouse);
+}
 
 void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float screenH, double now) {
   Impl& d = *impl_;
@@ -58,11 +60,14 @@ void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float sc
     else if (isHotkeyPressed(settings.hotkeys.toggleEditMode)) editMode_ = !editMode_;
   }
 
-  // A new mission report arrived: remember it and pop the summary if enabled.
+  // A new mission report arrived: pop the summary if enabled. Aborted missions (left before
+  // the results screen) are not shown automatically; "Show last mission" still opens them.
   if (snapshot.lastReport && snapshot.lastReport->id != d.lastSeenReportId) {
     d.lastSeenReportId = snapshot.lastReport->id;
-    d.summaryReport = snapshot.lastReport;
-    if (settings.summary.autoShow) summaryOpen_ = true;
+    if (!snapshot.lastReport->aborted) {
+      d.summaryReport = snapshot.lastReport;
+      if (settings.summary.autoShow) summaryOpen_ = true;
+    }
   }
   if (summaryOpen_ && !d.summaryReport) d.summaryReport = snapshot.lastReport;
 

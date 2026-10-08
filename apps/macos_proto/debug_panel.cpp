@@ -84,9 +84,9 @@ void ProtoApp::drawDebugPanel(float screenW, float screenH) {
     if (replayFiles_.empty()) ImGui::TextDisabled("No .csv files in the replay folders.");
     if (ImGui::BeginListBox("##replays", ImVec2(-FLT_MIN, fs * 6.0f))) {
       for (int i = 0; i < static_cast<int>(replayFiles_.size()); ++i) {
-        const std::string label = replayFiles_[static_cast<std::size_t>(i)].filename().string();
-        if (ImGui::Selectable(label.c_str(), replayIndex_ == i)) replayIndex_ = i;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", replayFiles_[static_cast<std::size_t>(i)].string().c_str());
+        const std::filesystem::path& file = replayFiles_[static_cast<std::size_t>(i)];
+        if (ImGui::Selectable(pathToUtf8(file.filename()).c_str(), replayIndex_ == i)) replayIndex_ = i;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pathToUtf8(file).c_str());
       }
       ImGui::EndListBox();
     }
@@ -119,7 +119,7 @@ void ProtoApp::drawDebugPanel(float screenW, float screenH) {
   } else if (!recordStatus_.empty()) {
     ImGui::TextWrapped("%s", recordStatus_.c_str());
   } else {
-    ImGui::TextDisabled("Writes to %s", config_.recordDir.string().c_str());
+    ImGui::TextDisabled("Writes to %s", pathToUtf8(config_.recordDir).c_str());
   }
 
   readouts();
@@ -144,7 +144,9 @@ void ProtoApp::drawDebugPanel(float screenW, float screenH) {
   ImGui::Text("Font %.1f px, line %.1f px", static_cast<double>(l.fontPx), static_cast<double>(l.lineHeightPx));
   ImGui::TextDisabled("Framebuffer %.0f x %.0f px (scale %.1f)", static_cast<double>(screenW * fb.x),
                       static_cast<double>(screenH * fb.y), static_cast<double>(fb.x));
-  ImGui::TextDisabled("Ctrl+F8 settings   Ctrl+F9 edit layout");
+  const HotkeySettings& hk = store_.settings().hotkeys;
+  ImGui::TextDisabled("%s settings   %s edit layout", hk.toggleMenu.toString().c_str(),
+                      hk.toggleEditMode.toString().c_str());
 
   ImGui::PopItemWidth();
   ImGui::End();
@@ -165,7 +167,7 @@ void ProtoApp::simulatorControls() {
   if (opts.scenario == Scenario::Manual) {
     ImGui::TextColored(kAccent, "W/Up pull (to +9 G)  S/Down push (to -3 G)");
     ImGui::TextColored(kAccent, "A/D or Left/Right roll   Shift/Z throttle");
-    ImGui::TextDisabled("nz cmd %+.1f G   roll %+.0f deg/s   throttle %.0f%%", manual_.nzCmd,
+    ImGui::TextDisabled("nz cmd %+.1f G   roll %+.0f \xC2\xB0/s   throttle %.0f%%", manual_.nzCmd,
                         manual_.rollRateDegS, manual_.throttle * 100.0);
   }
 
@@ -271,7 +273,7 @@ void ProtoApp::readouts() {
     ImGui::TableSetupColumn("error");
     ImGui::TableHeadersRow();
     readoutRow(totalMode ? "G total" : "Nz", trueG, hasNz, m.g, m.valid, "%+.2f");
-    readoutRow("AoA deg", trueAoa, hasAoa, m.aoaDeg, m.valid && m.aoaValid, "%+.1f");
+    readoutRow("AoA \xC2\xB0", trueAoa, hasAoa, m.aoaDeg, m.valid && m.aoaValid, "%+.1f");
     ImGui::EndTable();
   }
   ImGui::Text("raw %+.2f  onset %+.1f G/s  speed %.0f km/h", m.gRaw, m.onsetRate, m.speed * 3.6);

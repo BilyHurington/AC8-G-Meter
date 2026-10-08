@@ -44,6 +44,16 @@ TEST_CASE("settings defaults match the spec") {
   CHECK(s.hotkeys.toggleEditMode.toString() == "Ctrl+F9");
   CHECK(s.summary.autoShow);
   CHECK(s.metrics.gMode == GMode::Nz);
+  CHECK(s.metrics.smoothingTauS == doctest::Approx(0.05));
+}
+
+TEST_CASE("default visible metrics are set by id") {
+  const auto v = defaultVisibleMetrics();
+  CHECK(v[static_cast<std::size_t>(MetricId::CurrentG)]);
+  CHECK(v[static_cast<std::size_t>(MetricId::MaxG)]);
+  CHECK(v[static_cast<std::size_t>(MetricId::MinG)]);
+  CHECK_FALSE(v[static_cast<std::size_t>(MetricId::Speed)]);
+  CHECK(OverlaySettings{}.visible == v);
 }
 
 TEST_CASE("metric keys are unique and stable") {
@@ -127,6 +137,17 @@ TEST_CASE("out-of-range values are clamped") {
   CHECK(s.metrics.smoothingTauS == 1.0f);
   CHECK(s.metrics.highGEnter == 12.0f);
   CHECK(s.metrics.highGExit == doctest::Approx(11.9f));
+
+  // Doubles far outside float range (and huge integers) must not hit float-conversion UB.
+  Settings huge;
+  REQUIRE(settingsFromJson(R"({
+    "overlay": { "pos_x": 1e300, "pos_y": -1e300, "font_size_1080p": 18446744073709551615 },
+    "metrics": { "smoothing_tau_s": 1e39 }
+  })", huge));
+  CHECK(huge.overlay.posX == 1.0f);
+  CHECK(huge.overlay.posY == 0.0f);
+  CHECK(huge.overlay.fontSizeAt1080p == 64.0f);
+  CHECK(huge.metrics.smoothingTauS == 1.0f);
 
   Settings low;
   low.metrics.highGEnter = 1.0f;  // below range

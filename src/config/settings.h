@@ -3,7 +3,9 @@
 // Sections are independent structs so new features (e.g. a future `physiology`
 // section for blackout / redout effects) can be added without touching the others.
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 
 #include "core/pipeline.h"
@@ -33,6 +35,15 @@ struct Color {
   bool operator==(const Color&) const = default;
 };
 
+// Metrics shown on a fresh install: current, max and min G. Indexed by MetricId, so it stays
+// correct when metrics are added.
+constexpr std::array<bool, kMetricCount> defaultVisibleMetrics() {
+  std::array<bool, kMetricCount> v{};
+  for (MetricId id : {MetricId::CurrentG, MetricId::MaxG, MetricId::MinG})
+    v[static_cast<std::size_t>(id)] = true;
+  return v;
+}
+
 struct OverlaySettings {
   float posX = 0.045f;            // top-left corner, fraction of screen width
   float posY = 0.16f;             // top-left corner, fraction of screen height
@@ -45,7 +56,7 @@ struct OverlaySettings {
   float shadowAlpha = 0.55f;
   bool background = false;
   float backgroundAlpha = 0.35f;
-  std::array<bool, kMetricCount> visible{true, true, true, false, false, false, false, false};
+  std::array<bool, kMetricCount> visible = defaultVisibleMetrics();
 
   bool isVisible(MetricId id) const { return visible[static_cast<int>(id)]; }
   bool operator==(const OverlaySettings&) const = default;
@@ -53,7 +64,7 @@ struct OverlaySettings {
 
 struct MetricsSettings {
   GMode gMode = GMode::Nz;
-  float smoothingTauS = 0.10f;
+  float smoothingTauS = 0.05f;  // keep equal to PipelineConfig::smoothingTauS
   float highGEnter = 6.0f;
   float highGExit = 5.5f;
   bool operator==(const MetricsSettings&) const = default;
