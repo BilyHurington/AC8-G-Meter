@@ -3,6 +3,8 @@
 //
 //   push(sample)
 //     -> sanitize (non-finite, time order, gaps, teleports)
+//     -> noise / sample-rate estimate (NoiseEstimator) -> adaptive windows
+//     -> spike gate (SpikeGate: glitches, look-back, jumps)
 //     -> kinematics (acceleration from timestamped velocity / position, least squares)
 //     -> load factor in body axes (attitude at the acceleration's time)
 //     -> median + EMA smoothing -> G per GMode -> onset rate
@@ -27,16 +29,20 @@ struct PipelineConfig {
   // window (more lag, ~windowS / 2) to keep the G noise comparable to velocity input.
   double accelWindowPositionOnlyS = 0.15;
   double onsetWindowS = 0.15;       // least-squares window for dG/dt
-  double smoothingTauS = 0.05;      // EMA time constant applied to G (0 = off)
+  // EMA time constant applied to G (0 = off). With adaptive filtering, the upper limit of the
+  // adaptive tau.
+  double smoothingTauS = 0.05;
   // Adaptive filtering (velocity input). The acceleration is the least-squares slope of
   // N = T / dt velocity samples over a window T, whose standard error with per-axis velocity
   // noise sigma is sigma * sqrt(12 / (N T^2)). The window that keeps it at adaptiveTargetG:
-  //   T = cbrt(12 sigma^2 dt / (adaptiveTargetG * g0)^2), clamped to [2.5 dt, adaptiveMaxWindowS]
-  // with sigma and dt measured from the data (NoiseEstimator) and T smoothed over ~1 s. Clean
-  // or high-rate data gets a short window and little lag (clean 60 Hz: ~25 ms instead of
-  // ~105 ms with the fixed defaults); noisy data gets up to the clamp, as robust as the fixed
-  // windows. EMA tau = adaptiveTauRatio * T; onset window = adaptiveOnsetRatio * T within
-  // [4 dt, onsetWindowS]. accelWindowS and smoothingTauS are the fallback until the noise
+  //   T* = cbrt(12 sigma^2 dt / (adaptiveTargetG * g0)^2)
+  // with sigma and dt measured from the data (NoiseEstimator). T* follows increases at once
+  // and decreases over ~1 s. Then
+  //   window = T* within [2.5 dt, adaptiveMaxWindowS], EMA tau = adaptiveTauRatio * T* up to
+  //   smoothingTauS, onset window = adaptiveOnsetRatio * window within [4 dt, onsetWindowS],
+  // so the adaptive filter is never slower than the fixed one: clean or high-rate data gets a
+  // short window and little lag (clean 60 Hz: ~40 ms instead of ~105 ms), heavy noise converges
+  // to the fixed windows. accelWindowS and smoothingTauS are the fallback until the noise
   // estimate is ready (~16 samples), and all three windows are used as-is when this is off.
   // Position-only input always uses the fixed windows: its acceleration is a second
   // derivative of noisy positions, whose noise follows a different law (~sigma_p / T^2.5)
@@ -44,21 +50,21 @@ struct PipelineConfig {
   bool adaptiveFiltering = true;
   double adaptiveTargetG = 0.06;     // G noise (1 sigma per axis) the window is sized for
   double adaptiveTauRatio = 0.4;
-  double adaptiveMaxWindowS = 0.12;
+  double adaptiveMaxWindowS = 0.08;  // = accelWindowS: never a longer window than the fixed one
   double adaptiveOnsetRatio = 3.0;
-  // Median filter length in *samples* (odd, 1 = off); removes isolated spikes from G. Off
-  // by default: the spike gate already removes glitches before the estimators, and a median
-  // of N adds (N - 1) / 2 frames of delay (~33 ms at 60 fps for N = 5).
-  int medianWindow = 1;
+  // Median filter length in *samples* (odd, 1 = off). Removes the single bad output frame of a
+  // glitch the spike gate only catches one sample later (SpikeGate look-back), for one sample
+  // of delay; a median of N adds (N - 1) / 2 frames.
+  int medianWindow = 3;
   double highGEnter = 6.0;          // sustained high-G episode starts at >= this
   double highGExit = 5.5;           // ... and ends below this (hysteresis)
   double maxGapS = 0.25;            // dt above this resets differentiators (hitch/pause)
-  // Spike gate (velocity input), in G: a sample is a data glitch if its velocity misses the
-  // value predicted from the recent least-squares trend by more than this acceleration
-  // deviation over one step (or by more than the input's own noise allows, whichever is
-  // larger). A real manoeuvre cannot change the load factor by 30 G between two frames; a
-  // game glitch such as a +300 m/s velocity error reads as ~1800 G at 60 fps. Consistency
-  // only: there is no cap on the G value itself.
+  // Spike gate (velocity input, see SpikeGate), in G: a sample is a data glitch if its
+  // velocity misses the value predicted from the recent least-squares trend by more than this
+  // acceleration deviation over one step (or by more than the input's own noise allows,
+  // whichever is larger). A game glitch such as a +300 m/s velocity error reads as ~1800 G at
+  // 60 fps. A real step larger than this is accepted after SpikeGate::kRunLength samples
+  // (DataQuality::resetsJump). Consistency only: there is no cap on the G value itself.
   double spikeDeviationG = 30.0;
   // Informational only: samples with |load factor| above this are counted in
   // DataQuality::extremeG / MissionStats::extremeGSamples. They are used like any other.
@@ -79,7 +85,9 @@ class IMetricsConsumer {
   virtual void onMetrics(const FlightMetrics& metrics, MissionPhase phase) = 0;
   virtual void onMissionStarted() {}
   virtual void onMissionEnded(const MissionReport& /*report*/) {}
-  virtual void onReset() {}  // pipeline reset / discontinuity (teleport, respawn)
+  // Pipeline reset / discontinuity (teleport, respawn). Not called for a velocity-only jump
+  // (DataQuality::resetsJump), which may be a real manoeuvre.
+  virtual void onReset() {}
 };
 
 class TelemetryPipeline {
@@ -90,10 +98,10 @@ class TelemetryPipeline {
   TelemetryPipeline& operator=(const TelemetryPipeline&) = delete;
 
   // Applies new tuning. Filter state is reset only if a fixed window/size parameter or the
-  // G mode changed (not by the adaptive-filtering fields: windows trim by time). Mission statistics are preserved, except that a G mode change clears
-  // the G-derived ones (extremes, onset, histogram, high-G, timeline) and the recent
-  // history, since Nz and |n| values must not be mixed. Duration, max speed, max AoA and
-  // sample counts are kept.
+  // G mode changed (not by the adaptive-filtering fields: windows trim by time). Mission
+  // statistics are preserved, except that a G mode change clears the G-derived ones
+  // (extremes, onset, histogram, high-G, timeline) and the recent history, since Nz and |n|
+  // values must not be mixed. Duration, max speed, max AoA and sample counts are kept.
   void setConfig(const PipelineConfig& config);
   const PipelineConfig& config() const;
 

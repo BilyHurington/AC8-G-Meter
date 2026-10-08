@@ -77,3 +77,63 @@ TEST_CASE("NoiseEstimator ignores sparse glitches and discontinuities") {
   CHECK(est->sigma() == 0.0);
   CHECK(est->sampleInterval() == 0.0);
 }
+
+TEST_CASE("NoiseEstimator: fast attack, slow release") {
+  // 1000 Hz, sigma 0.005 -> 0.5 m/s at t = 3 s and back to 0.005 at t = 6 s. More noise must
+  // show within ~0.1 s (it widens the spike gate and the window); less noise only after ~1 s.
+  auto est = std::make_unique<NoiseEstimator>();
+  const Trajectory turn = levelTurn(60.0);
+  Gaussian noise(21);
+  double sigmaAt3_1 = 0.0, sigmaAt6_2 = 0.0, sigmaAt8 = 0.0;
+  for (int i = 0; i < 8000; ++i) {
+    const double t = i / 1000.0;
+    est->add(t, turn(t).velocity + noise.vec(t >= 3.0 && t < 6.0 ? 0.5 : 0.005));
+    if (i == 3100) sigmaAt3_1 = est->sigma();
+    if (i == 6200) sigmaAt6_2 = est->sigma();
+    if (i == 7999) sigmaAt8 = est->sigma();
+  }
+  CHECK(sigmaAt3_1 == Approx(0.5).epsilon(0.3));
+  CHECK(sigmaAt6_2 == Approx(0.5).epsilon(0.3));  // still the 2 s median
+  CHECK(sigmaAt8 < 0.01);
+}
+
+TEST_CASE("NoiseEstimator: a cluster of glitches is not a noise step") {
+  // 10 % of the samples off by 3 m/s (each disturbs three residuals): the short window uses
+  // a quartile, so only a sustained change moves the estimate.
+  auto est = std::make_unique<NoiseEstimator>();
+  const Trajectory level = levelFlight();
+  std::mt19937 rng(5);
+  double worst = 0.0;
+  for (int i = 0; i < 600; ++i) {
+    const double t = i / 60.0;
+    Vec3 v = level(t).velocity;
+    if (rng() % 10 == 0) v.z += 3.0;
+    est->add(t, v);
+    if (est->ready()) worst = std::max(worst, est->sigma());
+  }
+  CHECK(worst < 0.05);
+}
+
+TEST_CASE("NoiseEstimator: the sample interval follows a rate drop within 0.5 s") {
+  auto est = std::make_unique<NoiseEstimator>();
+  const Trajectory turn = levelTurn(60.0);
+  double t = 0.0;
+  for (; t < 4.0; t += 1.0 / 240.0) est->add(t, turn(t).velocity);
+  CHECK(est->sampleInterval() == Approx(1.0 / 240.0).epsilon(0.01));
+  const double drop = t;
+  for (; t < drop + 0.5; t += 1.0 / 60.0) est->add(t, turn(t).velocity);
+  CHECK(est->sampleInterval() == Approx(1.0 / 60.0).epsilon(0.01));  // took ~1.6 s before
+}
+
+TEST_CASE("NoiseEstimator: near-duplicate timestamps are not the sample rate") {
+  // Every 60 Hz frame delivered twice, 1 us apart.
+  auto est = std::make_unique<NoiseEstimator>();
+  const Trajectory turn = levelTurn(60.0);
+  for (int i = 0; i < 180; ++i) {
+    const double t = i / 60.0;
+    est->add(t, turn(t).velocity);
+    est->add(t + 1e-6, turn(t + 1e-6).velocity);
+  }
+  CHECK(est->sampleInterval() == Approx(1.0 / 60.0).epsilon(0.01));
+  CHECK(est->sigma() < 0.005);
+}

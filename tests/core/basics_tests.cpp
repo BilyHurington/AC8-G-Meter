@@ -141,6 +141,61 @@ TEST_CASE("TimedWindow slope is exact for linear data with uneven spacing") {
   CHECK(sparse.size() == 3);
 }
 
+TEST_CASE("TimedWindow: span-aware trim, popNewest, trimBefore, slope of the oldest n") {
+  // Frames at 0, 30, 40, 50 ms with a 25 ms window: plain trimming would keep 40 and 50 only
+  // (span 10 ms); with minSpanS = 15 ms it keeps one older sample (30 ms: span 20 ms).
+  TimedWindow<double> w;
+  for (double t : {0.0, 0.030, 0.040, 0.050}) {
+    w.push(t, 2.0 * t);
+    w.trim(0.025, 2, 0.015);
+  }
+  CHECK(w.size() == 3);
+  CHECK(w.time(0) == Approx(0.030));
+  w.popNewest();
+  CHECK(w.size() == 2);
+  CHECK(w.time(1) == Approx(0.040));
+  CHECK(w.slope(1) == 0.0);
+  CHECK(w.slope(2) == Approx(2.0));
+  w.trimBefore(0.035);
+  CHECK(w.size() == 1);
+  CHECK(w.time(0) == Approx(0.040));
+}
+
+TEST_CASE("KinematicsEstimator: warm-up span rule, look-back helpers") {
+  const Vec3 a{0.0, 0.0, 20.0};
+  KinematicsEstimator k;
+  k.setWindows(0.08, 0.15);
+  auto v = [&](double t) { return Vec3{200.0, 0.0, 0.0} + a * t; };
+  // A single sample predicts constant velocity (gates the second sample after a reset).
+  k.add(0.0, {}, v(0.0));
+  REQUIRE(k.predictVelocity(0.01));
+  checkVec(*k.predictVelocity(0.01), v(0.0));
+  CHECK_FALSE(k.predictVelocityWithoutNewest(0.01));
+  // 60 Hz: no acceleration until the window spans 0.6 * 80 ms.
+  for (int i = 1; i <= 2; ++i) k.add(i / 60.0, {}, v(i / 60.0));
+  CHECK_FALSE(k.hasAcceleration());
+  k.add(3 / 60.0, {}, v(3 / 60.0));
+  CHECK(k.hasAcceleration());
+  // Warm-up only: a longer window keeps reporting while it fills.
+  k.setWindows(0.3, 0.15);
+  k.add(4 / 60.0, {}, v(4 / 60.0));
+  CHECK(k.hasAcceleration());
+  checkVec(k.acceleration(), a, 1e-6);
+
+  // A suspect sample (hold) is used for predictions but left out of the estimates; removing
+  // it restores the trend.
+  const Vec3 glitch = v(5 / 60.0) + Vec3{0.0, 0.0, 3.0};
+  k.add(5 / 60.0, {}, glitch, /*holdNewest=*/true);
+  checkVec(k.acceleration(), a, 1e-6);
+  checkVec(k.velocity(), v(4 / 60.0), 1e-9);
+  CHECK(length(*k.predictVelocity(6 / 60.0) - v(6 / 60.0)) > 1.0);
+  checkVec(*k.predictVelocityWithoutNewest(6 / 60.0), v(6 / 60.0), 1e-6);
+  k.removeNewest();
+  CHECK(k.size() == 5);
+  checkVec(*k.predictVelocity(6 / 60.0), v(6 / 60.0), 1e-6);
+  CHECK(k.lastTime() == Approx(4 / 60.0));
+}
+
 TEST_CASE("KinematicsEstimator: velocity slope and position quadratic fit") {
   const Vec3 a{3.0, -2.0, 9.0};
   const Vec3 v0{200.0, 10.0, -5.0};

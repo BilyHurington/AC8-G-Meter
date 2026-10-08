@@ -34,20 +34,21 @@ $R --generate turn     --duration 30 --out data/replays/position_only_turn.csv -
 - **aligned** RMS: after shifting the truth by the delay (0–300 ms) that best aligns the two,
   i.e. the estimation quality with the delay removed. The delay itself is reported as `lag`.
 
-The check passes when, for G, the zero-lag RMS is at most 0.17 G and the aligned RMS at most
-0.15 G; for AoA, the aligned RMS is at most 0.5°; and the delay is at most 35 ms. These defaults
+The check passes when, for G, the zero-lag RMS is at most 0.29 G and the aligned RMS at most
+0.15 G; for AoA, the aligned RMS is at most 0.5°; and the delay is at most 52 ms. These defaults
 are for clean velocity logs. A log can override any of them with a comment line such as
 `# check: g_rms0<=0.8 g_rms<=0.35 aoa_rms<=1.5 latency_ms<=180` (`g_rms` is the aligned limit).
 
 The default config uses adaptive filtering: the velocity least-squares window, EMA τ and onset
 window follow the measured sample rate and velocity noise (`PipelineConfig::adaptiveFiltering`),
-and the median filter is off. Measured (limits are ~30% above):
+never longer than the fixed ones, and a 3-sample median removes single bad output frames (one
+sample of delay). Measured (limits are ~30% above):
 
 | Log | Filter (end of log) | Delay | Zero-lag G RMS |
 |---|---|---|---|
-| clean velocity logs (60 Hz) | adaptive, window 42 ms, τ 17 ms | 25 ms | 0.00–0.13 G (dogfight_mix worst) |
-| `dirty_dogfight.csv` (0.05 m/s noise) | adaptive, window ~115 ms, τ ~45 ms | 85 ms | 0.42 G |
-| `position_only_turn.csv` | fixed, 0.15 s position window, τ 50 ms | 110 ms | 0.29 G |
+| clean velocity logs (60 Hz) | adaptive, window 42 ms, τ 17 ms | 40 ms | 0.00–0.22 G (dogfight_mix worst) |
+| `dirty_dogfight.csv` (0.05 m/s noise) | adaptive, window 80 ms, τ ~48 ms | 90 ms | 0.45 G |
+| `position_only_turn.csv` | fixed, 0.15 s position window, τ 50 ms | 125 ms | 0.33 G |
 
 With the old fixed defaults (0.08 s window, median 5, τ 0.05 s) the delay was ~105 ms on every
 velocity log and the zero-lag RMS up to 0.54 G. `build/apps/latency_bench/latency_bench`

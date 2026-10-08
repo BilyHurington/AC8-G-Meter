@@ -18,9 +18,14 @@ namespace ft {
 class KinematicsEstimator {
  public:
   static constexpr int kMinPoints = 3;  // for an acceleration estimate
-  // Minimum window span, as a fraction of the window length, before an acceleration is
-  // reported. A fit over just a few frames turns input noise into tens of G at high sample
-  // rates (3 velocity samples 1 ms apart with 0.2 m/s of noise: ~14 G per axis).
+  // Minimum window span, as a fraction of the window length. A fit over just a few frames
+  // turns input noise into tens of G at high sample rates (3 velocity samples 1 ms apart with
+  // 0.2 m/s of noise: ~14 G per axis), so:
+  //   - after a reset, no acceleration is reported until the window spans this much
+  //     (warm-up only: a window that later grows, e.g. a longer adaptive window, keeps
+  //     reporting while it fills);
+  //   - trimming keeps one sample older than the window while the rest span less than this,
+  //     so frame-time jitter never shrinks the fit below it.
   static constexpr double kMinSpan = 0.6;
 
   void setWindows(double velocityWindowS, double positionWindowS) {
@@ -32,24 +37,34 @@ class KinematicsEstimator {
   void reset();
 
   // Appends a sample. Switching between velocity and position input resets the window
-  // (the two estimates are not interchangeable mid-window).
-  void add(double t, const Vec3& position, const std::optional<Vec3>& velocity);
+  // (the two estimates are not interchangeable mid-window). holdNewest (velocity input): the
+  // sample is suspect (SpikeGate): it is used for predictions, but the estimates (velocity(),
+  // acceleration(), ...) leave it out until the next add() or removeNewest().
+  void add(double t, const Vec3& position, const std::optional<Vec3>& velocity, bool holdNewest = false);
+
+  // Velocity input: removes the newest `count` samples (glitches found after the fact) and
+  // re-estimates from the others. At least one sample is kept.
+  void removeNewest(int count = 1);
 
   bool empty() const { return window_.size() == 0; }
+  int size() const { return window_.size(); }  // samples in the window
+  double oldestTime() const { return window_.size() > 0 ? window_.time(0) : lastT_; }
+  double lastTime() const { return lastT_; }
   bool hasVelocity() const { return hasVelocity_; }
   Vec3 velocity() const { return velocity_; }          // m/s at the newest sample
   bool hasAcceleration() const { return hasAccel_; }
   Vec3 acceleration() const { return accel_; }         // m/s^2, world frame
   double accelerationTime() const { return accelT_; }  // instant acceleration() refers to
-  double lastTime() const { return lastT_; }
-  Vec3 lastPosition() const { return lastP_; }
 
   // Velocity input: the velocity expected at time t from the newest sample and the current
-  // least-squares acceleration trend (also used before acceleration() is reported), or
-  // nothing in position mode / with fewer than 2 samples (no trend known yet). Used to
-  // reject spikes before they enter the window (one bad point would otherwise corrupt
+  // least-squares acceleration trend (also used before acceleration() is reported; constant
+  // velocity with a single sample), or nothing in position mode / with an empty window. Used
+  // to reject spikes before they enter the window (one bad point would otherwise corrupt
   // every estimate it stays in).
   std::optional<Vec3> predictVelocity(double t) const;
+  // Same, from the window without its newest `count` samples (nothing if that leaves none).
+  // Tells whether the newest samples, rather than a new one, are the outliers.
+  std::optional<Vec3> predictVelocityWithoutNewest(double t, int count = 1) const;
 
   // Position-only input: where the current fit puts the aircraft at time t (the fit
   // extrapolated, or the newest position + velocity * dt with only two samples), or
@@ -61,8 +76,10 @@ class KinematicsEstimator {
 
  private:
   enum class Mode { Empty, Velocity, Position };
-  void estimateFromVelocity();
+  void estimateFromVelocity(bool holdNewest);
   void estimateFromPosition();
+  // Velocity at time t extrapolated from the oldest n window samples (n >= 1).
+  Vec3 extrapolateVelocity(int n, double t) const;
 
   double velocityWindowS_ = 0.08;
   double positionWindowS_ = 0.15;
@@ -73,6 +90,7 @@ class KinematicsEstimator {
   bool hasVelocity_ = false;
   Vec3 velocity_;
   bool hasAccel_ = false;
+  bool warmedUp_ = false;  // the window has spanned kMinSpan of its length since the reset
   Vec3 accel_;
   double accelT_ = 0.0;
 

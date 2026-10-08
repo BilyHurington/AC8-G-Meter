@@ -10,13 +10,15 @@ void KinematicsEstimator::reset() {
   window_.reset();
   hasVelocity_ = false;
   hasAccel_ = false;
+  warmedUp_ = false;
   hasFit_ = false;
   velocity_ = {};
   accel_ = {};
   residualSigma_ = 0.0;
 }
 
-void KinematicsEstimator::add(double t, const Vec3& position, const std::optional<Vec3>& velocity) {
+void KinematicsEstimator::add(double t, const Vec3& position, const std::optional<Vec3>& velocity,
+                              bool holdNewest) {
   const Mode mode = velocity ? Mode::Velocity : Mode::Position;
   if (mode != mode_) {
     reset();
@@ -25,21 +27,32 @@ void KinematicsEstimator::add(double t, const Vec3& position, const std::optiona
   lastT_ = t;
   lastP_ = position;
   window_.push(t, velocity ? *velocity : position);
-  window_.trim(windowS(), kMinPoints);
+  window_.trim(windowS(), kMinPoints, kMinSpan * windowS());
   if (mode_ == Mode::Velocity) {
-    estimateFromVelocity();
+    estimateFromVelocity(holdNewest);
   } else {
     estimateFromPosition();
   }
 }
 
-void KinematicsEstimator::estimateFromVelocity() {
+void KinematicsEstimator::removeNewest(int count) {
+  if (mode_ != Mode::Velocity) return;
+  for (int i = 0; i < count && window_.size() > 1; ++i) window_.popNewest();
+  lastT_ = window_.time(window_.size() - 1);
+  estimateFromVelocity(false);
+}
+
+void KinematicsEstimator::estimateFromVelocity(bool holdNewest) {
   hasVelocity_ = true;
   const int n = window_.size();
-  velocity_ = window_.value(n - 1);
-  hasAccel_ = n >= kMinPoints && window_.time(n - 1) - window_.time(0) >= kMinSpan * velocityWindowS_;
-  accel_ = window_.slope();  // 0 with a single sample
-  accelT_ = window_.meanTime();
+  warmedUp_ = warmedUp_ || window_.time(n - 1) - window_.time(0) >= kMinSpan * velocityWindowS_;
+  hasAccel_ = n >= kMinPoints && warmedUp_;
+  // A suspect newest sample is left out of the estimates (a 2-point slope for this one frame
+  // if need be: there are suspects only when the noise is far below them).
+  const int used = holdNewest && n > 2 ? n - 1 : n;
+  velocity_ = window_.value(used - 1);
+  accel_ = window_.slope(used);  // 0 with a single sample
+  accelT_ = window_.meanTime(used);
 }
 
 void KinematicsEstimator::estimateFromPosition() {
@@ -91,9 +104,10 @@ void KinematicsEstimator::estimateFromPosition() {
   accelT_ = tMean;
   hasFit_ = true;
   // A fit over just a few frames turns centimetres of position noise into tens of G:
-  // report acceleration only once the window spans most of its length (at low frame
+  // report acceleration only once the window has spanned most of its length (at low frame
   // rates the kMinPoints samples always do).
-  hasAccel_ = 2.0 * h >= kMinSpan * positionWindowS_;
+  warmedUp_ = warmedUp_ || 2.0 * h >= kMinSpan * positionWindowS_;
+  hasAccel_ = warmedUp_;
 
   // Noise estimate: residual sum of squares over the 3 (n - 3) degrees of freedom left.
   if (n > kMinPoints) {
@@ -107,8 +121,17 @@ void KinematicsEstimator::estimateFromPosition() {
 }
 
 std::optional<Vec3> KinematicsEstimator::predictVelocity(double t) const {
-  if (mode_ != Mode::Velocity || window_.size() < 2) return std::nullopt;
-  return velocity_ + accel_ * (t - lastT_);
+  if (mode_ != Mode::Velocity || window_.size() < 1) return std::nullopt;
+  return extrapolateVelocity(window_.size(), t);
+}
+
+std::optional<Vec3> KinematicsEstimator::predictVelocityWithoutNewest(double t, int count) const {
+  if (mode_ != Mode::Velocity || window_.size() <= count) return std::nullopt;
+  return extrapolateVelocity(window_.size() - count, t);
+}
+
+Vec3 KinematicsEstimator::extrapolateVelocity(int n, double t) const {
+  return window_.value(n - 1) + window_.slope(n) * (t - window_.time(n - 1));
 }
 
 std::optional<Vec3> KinematicsEstimator::predictPosition(double t) const {

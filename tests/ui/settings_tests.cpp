@@ -271,3 +271,42 @@ TEST_CASE("default settings path ends in the app folder") {
   CHECK(p.filename() == "settings.json");
   CHECK(p.parent_path().filename() == "AC8FlightTelemetry");
 }
+
+TEST_CASE("version 1 settings migrate to adaptive filtering unless the smoothing was tuned") {
+  struct Case {
+    const char* json;
+    bool adaptive;
+    float tau;
+  };
+  const Case cases[] = {
+      // Untuned (an old default or missing): adaptive on, tau to the current default.
+      {R"({ "version": 1, "metrics": { "smoothing_tau_s": 0.1 } })", true, 0.05f},
+      {R"({ "version": 1, "metrics": { "smoothing_tau_s": 0.05 } })", true, 0.05f},
+      {R"({ "metrics": { "smoothing_tau_s": 0.1, "high_g_enter": 7 } })", true, 0.05f},  // no version
+      {R"({ "version": 1, "metrics": { "g_mode": "total" } })", true, 0.05f},
+      // Tuned by hand: keep it, adaptive off.
+      {R"({ "version": 1, "metrics": { "smoothing_tau_s": 0.2 } })", false, 0.2f},
+      {R"({ "metrics": { "smoothing_tau_s": 0.0 } })", false, 0.0f},
+      // A version 1 file that already has the flag, and version 2 files: read as stored.
+      {R"({ "version": 1, "metrics": { "smoothing_tau_s": 0.2, "adaptive_filtering": true } })", true, 0.2f},
+      {R"({ "version": 2, "metrics": { "smoothing_tau_s": 0.2 } })", true, 0.2f},
+      {R"({ "version": 2, "metrics": { "smoothing_tau_s": 0.1, "adaptive_filtering": false } })", false, 0.1f},
+  };
+  for (const Case& c : cases) {
+    CAPTURE(c.json);
+    Settings s;
+    REQUIRE(settingsFromJson(c.json, s));
+    CHECK(s.metrics.adaptiveFiltering == c.adaptive);
+    CHECK(s.metrics.smoothingTauS == doctest::Approx(c.tau));
+    CHECK(s.version == Settings::kVersion);
+  }
+
+  // Saved again, the file is version 2 and round-trips unchanged.
+  Settings migrated;
+  REQUIRE(settingsFromJson(R"({ "version": 1, "metrics": { "smoothing_tau_s": 0.2 } })", migrated));
+  const std::string json = settingsToJson(migrated);
+  CHECK(json.find("\"version\": 2") != std::string::npos);
+  Settings reloaded;
+  REQUIRE(settingsFromJson(json, reloaded));
+  CHECK(reloaded == migrated);
+}

@@ -94,7 +94,8 @@ struct SummarySettings {
 };
 
 struct Settings {
-  static constexpr int kVersion = 1;
+  // 2: adaptive filtering (version 1 files are migrated on load, see settings_store.cpp).
+  static constexpr int kVersion = 2;
   int version = kVersion;
   OverlaySettings overlay;
   MetricsSettings metrics;

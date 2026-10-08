@@ -46,19 +46,20 @@ TEST_CASE("a single position spike (position-only input) is rejected") {
   CHECK(snap.mission.minG == Approx(1.0).epsilon(1e-6));
 }
 
-TEST_CASE("a persistent velocity jump is accepted as a discontinuity") {
+TEST_CASE("a persistent velocity jump restarts the acceleration window only") {
   TelemetryPipeline p;
   RecordingConsumer c;
   p.addConsumer(&c);
   for (int i = 0; i < 120; ++i) {
     RawFlightSample s = levelSample(i / 60.0);
-    if (i >= 60) s.velocity->x += 100.0;  // e.g. respawn at a different speed
+    if (i >= 60) s.velocity->x += 100.0;  // speed jumps, position still on its track
     p.push(s);
   }
   const MetricsSnapshot snap = p.snapshot();
   CHECK(snap.quality.rejectedSpike == 2);
-  CHECK(snap.quality.resetsTeleport == 1);
-  CHECK(c.resets == 1);
+  CHECK(snap.quality.resetsJump == 1);
+  CHECK(snap.quality.resetsTeleport == 0);
+  CHECK(c.resets == 0);  // not a discontinuity of the aircraft state: no onReset
   CHECK(snap.current.valid);
   CHECK(snap.current.speed == Approx(kSpeed + 100.0));
   CHECK(snap.mission.maxG == Approx(1.0).epsilon(1e-6));

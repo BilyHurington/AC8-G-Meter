@@ -158,20 +158,28 @@ void SettingsMenu::metricsSection(Settings& s, const FilterState& filter, Settin
   pipe |= ImGui::Checkbox("Adaptive filtering", &m.adaptiveFiltering);
   helpMarker("Auto window from data rate & noise: sizes the G filter from the measured data "
              "rate and velocity noise. Clean or high-rate data gets a short window and much less "
-             "display delay, noisy data a longer one. Data without velocity always uses the fixed "
-             "filter. Turn off to set the smoothing by hand.");
-  ImGui::BeginDisabled(m.adaptiveFiltering);
+             "display delay; noisy data gets the fixed filter, never more. Data without velocity "
+             "always uses the fixed filter. Turn off to set the smoothing by hand.");
   pipe |= ImGui::SliderFloat("Smoothing", &m.smoothingTauS, 0.0f, 1.0f, "tau %.2f s", ImGuiSliderFlags_AlwaysClamp);
-  ImGui::EndDisabled();
-  helpMarker("Time constant of the G display filter. 0 = raw (after spike rejection). "
-             "Set automatically while adaptive filtering is on.");
+  helpMarker("Time constant of the G display filter. 0 = raw (after spike rejection). With "
+             "adaptive filtering on, this is the upper limit: clean data gets less.");
   if (m.adaptiveFiltering) {
-    if (filter.adaptive) {
-      ImGui::TextDisabled("Now: window %.0f ms, tau %.0f ms", filter.accelWindowS * 1000.0,
-                          filter.smoothingTauS * 1000.0);
-      ImGui::TextDisabled("     data %.0f Hz, noise %.3f m/s", filter.sampleRateHz, filter.velocityNoiseMS);
-    } else {
-      ImGui::TextDisabled("Now: fixed filter (no velocity data yet)");
+    switch (filter.input) {
+      case FilterState::Input::None:
+        ImGui::TextDisabled("Now: waiting for data");
+        break;
+      case FilterState::Input::PositionOnly:
+        ImGui::TextDisabled("Now: position-only input: fixed windows");
+        break;
+      case FilterState::Input::Velocity:
+        if (filter.adaptive) {
+          ImGui::TextDisabled("Now: window %.0f ms, tau %.0f ms", filter.accelWindowS * 1000.0,
+                              filter.smoothingTauS * 1000.0);
+          ImGui::TextDisabled("     data %.0f Hz, noise %.3f m/s", filter.sampleRateHz, filter.velocityNoiseMS);
+        } else {
+          ImGui::TextDisabled("Now: measuring noise... (fixed windows meanwhile)");
+        }
+        break;
     }
   }
   pipe |= ImGui::SliderFloat("High-G enter", &m.highGEnter, 2.0f, 12.0f, "%.1f G", ImGuiSliderFlags_AlwaysClamp);

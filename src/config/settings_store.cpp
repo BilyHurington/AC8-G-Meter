@@ -75,6 +75,17 @@ void readHotkey(const json& obj, const char* key, Hotkey& out) {
 
 const char* gModeKey(GMode m) { return m == GMode::Total ? "total" : "nz"; }
 
+// Version 1 files without "adaptive_filtering" predate adaptive filtering: their smoothing tau
+// was the whole G filter. Adaptive filtering is switched on unless that tau was tuned (differs
+// from both old defaults, 0.10 and 0.05 s); an untuned tau also moves to the current default,
+// which is now the upper limit of the adaptive tau.
+void migrateV1Metrics(MetricsSettings& m) {
+  const MetricsSettings defaults;
+  const bool tuned = std::abs(m.smoothingTauS - 0.10f) > 1e-4f && std::abs(m.smoothingTauS - 0.05f) > 1e-4f;
+  m.adaptiveFiltering = !tuned;
+  if (!tuned) m.smoothingTauS = defaults.smoothingTauS;
+}
+
 }  // namespace
 
 std::string pathToUtf8(const std::filesystem::path& path) {
@@ -152,6 +163,10 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
         readBool(*vis, metricKey(static_cast<MetricId>(i)), ov.visible[static_cast<std::size_t>(i)]);
     }
   }
+  int version = 1;  // files from before versioning have the version 1 layout
+  if (const auto it = root.find("version"); it != root.end() && it->is_number_integer())
+    version = it->get<int>();
+
   if (const json* m = section(root, "metrics")) {
     const auto it = m->find("g_mode");
     if (it != m->end() && it->is_string()) {
@@ -163,6 +178,8 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
     readFloat(*m, "smoothing_tau_s", out.metrics.smoothingTauS);
     readFloat(*m, "high_g_enter", out.metrics.highGEnter);
     readFloat(*m, "high_g_exit", out.metrics.highGExit);
+    const auto adaptive = m->find("adaptive_filtering");
+    if (version < 2 && (adaptive == m->end() || !adaptive->is_boolean())) migrateV1Metrics(out.metrics);
   }
   if (const json* h = section(root, "hotkeys")) {
     readHotkey(*h, "toggle_menu", out.hotkeys.toggleMenu);

@@ -12,36 +12,18 @@
 #include "core/mission_tracker.h"
 #include "core/noise_estimator.h"
 #include "core/sanitizer.h"
+#include "core/spike_gate.h"
 
 namespace ft {
 
 namespace {
 
 constexpr int kMinOnsetPoints = 3;
-// A jump that persists for this many samples is a real state change (respawn, mission
-// restart), not a glitch: accept it and restart the estimators.
-constexpr int kMaxConsecutiveSpikes = 3;
-// Position-only spike gate: a new position further than this from the fit's prediction is
-// a glitch. The noise term adapts to the input's jitter; the floor covers what the
-// quadratic extrapolation cannot follow in hard manoeuvres (worst seen on clean simulated
-// dogfights: 0.02 m at 60 fps, 0.4 m at 10 fps).
-constexpr double kPositionGateSigmas = 8.0;
-constexpr double kPositionGateFloorM = 1.0;
-// Velocity spike gate: besides spikeDeviationG * g0 * dt, a residual is tolerated up to
-// this many times the input's measured per-axis noise sigma. Per-step velocity noise grows
-// into huge implied accelerations at high sample rates (0.2 m/s of noise reads as ~30 G rms
-// per axis at 1000 Hz), so a pure G threshold would reject real samples there; this term
-// keeps the gate above the noise at any rate. The residual against the prediction has ~1.5
-// sigma per axis (new sample, newest sample, trend), so 15 sigma leaves a wide margin even
-// for heavy-tailed noise; game glitches are tens to hundreds of m/s. The floor covers
-// start-up, before the noise estimate exists.
-constexpr double kVelocityGateNoiseSigmas = 15.0;
-constexpr double kVelocityGateFloorMS = 1.0;
 // Adaptive filtering: the window never spans fewer than this many sample intervals, and
-// follows the ideal window from the noise estimate with this time constant (no jumps).
+// follows decreases of the ideal window with this time constant (increases at once).
 constexpr double kAdaptiveMinWindowSamples = 2.5;
 constexpr double kAdaptiveOnsetMinSamples = 4.0;
-constexpr double kAdaptiveWindowTauS = 1.0;
+constexpr double kAdaptiveReleaseTauS = 1.0;
 
 bool needsFilterReset(const PipelineConfig& a, const PipelineConfig& b) {
   return a.accelWindowS != b.accelWindowS ||
@@ -60,11 +42,12 @@ struct TelemetryPipeline::Impl {
   TimedWindow<Basis> attitudes;        // attitude history spanning the kinematics window
   std::array<Smoother, 3> bodySmooth;  // Nx, Ny, Nz; `g` is derived from these
   TimedWindow<double> onsetWindow;
+  SpikeGate gate;
   // Velocity input noise and sample rate: a property of the source, so it survives estimator
   // resets (cleared only by reset()). Shared by the spike gate and the adaptive windows.
   NoiseEstimator noise;
-  double adaptiveWindowS = 0.0;  // smoothed ideal velocity window, 0 until the noise is known
-  FilterState filter;            // windows in use (published in the snapshot)
+  double idealWindowS = 0.0;  // smoothed ideal velocity window T*, 0 until the noise is known
+  FilterState filter;         // windows in use (published in the snapshot)
 
   HighGTimer highG;
   MissionTracker mission;
@@ -75,7 +58,6 @@ struct TelemetryPipeline::Impl {
   Vec3 lastPos;
   std::optional<Vec3> lastVel;
   bool resetPending = false;  // restart estimators on the next accepted sample
-  int consecutiveSpikes = 0;
 
   FlightMetrics current;
   MissionPhase phase = MissionPhase::None;
@@ -95,43 +77,61 @@ struct TelemetryPipeline::Impl {
       for (Smoother& s : bodySmooth) s.configure(cfg.medianWindow, cfg.smoothingTauS);
       resetEstimators();
     }
-    selectWindows(lastVel.has_value(), 0.0);
+    selectWindows(0.0);
+  }
+
+  FilterState::Input inputKind() const {
+    if (!hasLast) return FilterState::Input::None;
+    return lastVel ? FilterState::Input::Velocity : FilterState::Input::PositionOnly;
+  }
+
+  // The acceleration window and its attitude history (a velocity jump restarts only these).
+  void restartKinematics() {
+    kinematics.reset();
+    attitudes.reset();
+    gate.clear();
   }
 
   void resetEstimators() {
-    kinematics.reset();
-    attitudes.reset();
+    restartKinematics();
     for (Smoother& s : bodySmooth) s.reset();
     onsetWindow.reset();
-    noise.restartSequence();
   }
 
-  // Chooses the filter windows for the next sample (see PipelineConfig::adaptiveFiltering).
-  // Only the windows change, never the estimator state: every window trims by time, so a
-  // new length simply applies from the next sample on.
-  void selectWindows(bool velocityInput, double stepDt) {
-    if (velocityInput && noise.ready() && noise.sampleInterval() > 0.0 && cfg.adaptiveTargetG > 0.0) {
-      const double dt = noise.sampleInterval();
+  // Chooses the filter windows for the next sample (see PipelineConfig::adaptiveFiltering)
+  // from the input kind of the last accepted sample. Only the windows change, never the
+  // estimator state: every window trims by time, so a new length applies from the next sample.
+  void selectWindows(double stepDt) {
+    const double dt = noise.sampleInterval();
+    const double minWindowS = kAdaptiveMinWindowSamples * dt;
+    filter.input = inputKind();
+    const bool velocityInput = filter.input != FilterState::Input::PositionOnly;
+    if (velocityInput && noise.ready() && dt > 0.0 && cfg.adaptiveTargetG > 0.0) {
       const double sigma = noise.sigma();
       const double target = cfg.adaptiveTargetG * kG0;
-      // The sample floor wins at very low rates (< ~21 Hz with the default clamp).
-      const double ideal = std::max(std::min(std::cbrt(12.0 * sigma * sigma * dt / (target * target)),
-                                             cfg.adaptiveMaxWindowS),
-                                    kAdaptiveMinWindowSamples * dt);
-      // Tracked even while adaptive filtering is off, so switching it on is seamless.
-      adaptiveWindowS = adaptiveWindowS > 0.0
-                            ? adaptiveWindowS + (1.0 - std::exp(-stepDt / kAdaptiveWindowTauS)) *
-                                                    (ideal - adaptiveWindowS)
-                            : ideal;
+      // T* only matters up to where both the window and tau are at their limits.
+      const double maxUseful = std::max(
+          {cfg.adaptiveMaxWindowS, cfg.adaptiveTauRatio > 0.0 ? cfg.smoothingTauS / cfg.adaptiveTauRatio : 0.0,
+           minWindowS});
+      const double ideal =
+          std::clamp(std::cbrt(12.0 * sigma * sigma * dt / (target * target)), minWindowS, maxUseful);
+      // Fast attack, slow release: more noise needs the longer window now, while cleaner data
+      // can wait to be sure. Tracked even while adaptive filtering is off, so switching it on
+      // is seamless.
+      if (ideal >= idealWindowS)
+        idealWindowS = ideal;
+      else
+        idealWindowS += (1.0 - std::exp(-stepDt / kAdaptiveReleaseTauS)) * (ideal - idealWindowS);
     }
-    filter.sampleRateHz = noise.sampleInterval() > 0.0 ? 1.0 / noise.sampleInterval() : 0.0;
+    filter.sampleRateHz = dt > 0.0 ? 1.0 / dt : 0.0;
     filter.velocityNoiseMS = noise.sigma();
-    filter.adaptive = cfg.adaptiveFiltering && velocityInput && adaptiveWindowS > 0.0;
+    filter.noiseReady = noise.ready();
+    filter.adaptive = cfg.adaptiveFiltering && velocityInput && idealWindowS > 0.0;
     if (filter.adaptive) {
-      const double dt = noise.sampleInterval();
-      filter.accelWindowS = adaptiveWindowS;
-      filter.smoothingTauS = cfg.adaptiveTauRatio * adaptiveWindowS;
-      filter.onsetWindowS = std::max(std::min(cfg.adaptiveOnsetRatio * adaptiveWindowS, cfg.onsetWindowS),
+      // The sample floor wins at very low rates (< ~31 Hz with the default limit).
+      filter.accelWindowS = std::max(std::min(idealWindowS, cfg.adaptiveMaxWindowS), minWindowS);
+      filter.smoothingTauS = std::clamp(cfg.adaptiveTauRatio * idealWindowS, 0.0, cfg.smoothingTauS);
+      filter.onsetWindowS = std::max(std::min(cfg.adaptiveOnsetRatio * filter.accelWindowS, cfg.onsetWindowS),
                                      kAdaptiveOnsetMinSamples * dt);
     } else {
       filter.accelWindowS = velocityInput ? cfg.accelWindowS : cfg.accelWindowPositionOnlyS;
@@ -205,35 +205,50 @@ struct TelemetryPipeline::Impl {
     if (phase == MissionPhase::Active) mission.countRejected();
   }
 
-  // Spike gate. The acceleration estimate is a least-squares fit over the kinematics
-  // window, so a single bad velocity/position sample would bias every estimate for as
-  // long as it stays in the window: a burst of plausible-looking garbage several samples
-  // long that the median filter (it only removes isolated outliers) cannot catch. So each
-  // sample is checked for consistency with the recent motion *before* it enters the window.
-  // Only consistency: the G value itself is never capped.
-  //   velocity input: the distance of the new velocity from the one predicted by the last
-  //     sample and the current acceleration trend, against the larger of
-  //     spikeDeviationG * g0 * dt (an acceleration change no aircraft makes in one step)
-  //     and a multiple of the input's measured velocity noise (NoiseEstimator).
-  //   position only : the distance from where the window's quadratic fit predicts the
-  //     aircraft, against a threshold scaled to the fit's residual noise. (A two-point
-  //     second difference would amplify position noise by ~4 / dt^2: 1 cm of jitter
-  //     reads as ~15 G at 60 fps.)
-  // The median filter (if enabled) then handles smaller isolated outliers in the G signal.
-  bool isSpike(const RawFlightSample& s, double dt) const {
-    if (!s.velocity) {
-      const std::optional<Vec3> predicted = kinematics.predictPosition(s.t);
-      if (!predicted) return false;
-      const double limit =
-          std::max(kPositionGateSigmas * kinematics.fitResidualSigma(), kPositionGateFloorM);
-      return length(s.position - *predicted) > limit;
+  // Runs the spike gate (SpikeGate) and applies its verdict to the window; the caller drops
+  // the sample on Reject and adds it otherwise.
+  SpikeGate::Verdict applyGate(const RawFlightSample& s, double dt) {
+    const SpikeGate::Verdict verdict =
+        gate.check(s, dt, kinematics, cfg.spikeDeviationG, noise.sigma(), noise.ready());
+    switch (verdict) {
+      case SpikeGate::Verdict::Accept:
+      case SpikeGate::Verdict::Hold:
+        break;
+      case SpikeGate::Verdict::DropPrevious:
+        kinematics.removeNewest(gate.dropCount());
+        for (int i = 0; i < gate.dropCount(); ++i) {
+          attitudes.popNewest();
+          reject(&DataQuality::rejectedSpike);
+        }
+        break;
+      case SpikeGate::Verdict::Reject:
+        reject(&DataQuality::rejectedSpike);
+        break;
+      case SpikeGate::Verdict::Jump: {
+        if (s.velocity) {
+          // The position agrees (no teleport): a velocity step, possibly a real manoeuvre
+          // beyond spikeDeviationG. Restart only the acceleration window; G display, high-G
+          // episode and consumers carry on.
+          restartKinematics();
+          ++quality.resetsJump;
+        } else {
+          discontinuity();
+          ++quality.resetsTeleport;
+        }
+        // The rejected run agrees on the new state: start the window from it (its last
+        // sample is s, which the caller adds), so the estimate is valid again at once.
+        const auto& run = gate.run();
+        for (std::size_t i = 0; i + 1 < run.size(); ++i) addToWindow(run[i]);
+        break;
+      }
     }
-    const std::optional<Vec3> predicted = kinematics.predictVelocity(s.t);
-    if (!predicted) return false;
-    const double limit = std::max({cfg.spikeDeviationG * kG0 * dt,
-                                   kVelocityGateNoiseSigmas * noise.sigma(),
-                                   kVelocityGateFloorMS});
-    return length(*s.velocity - *predicted) > limit;
+    return verdict;
+  }
+
+  void addToWindow(const RawFlightSample& s, bool hold = false) {
+    kinematics.add(s.t, s.position, s.velocity, hold);
+    attitudes.push(s.t, s.attitude);
+    attitudes.trimBefore(kinematics.oldestTime());
   }
 
   // Position jump inconsistent with the motion (respawn, checkpoint). Position-only input
@@ -288,39 +303,35 @@ struct TelemetryPipeline::Impl {
     // Mission time skips pauses and gaps (unknown what happened in between) but counts
     // everything else, including estimator warm-up.
     bool countTime = hasLast;
-    if (resetPending) {
+    const bool gap = hasLast && (dt > cfg.maxGapS || clockRestart);
+    if (resetPending || gap) {
       resetEstimators();
+      noise.restartSequence();
+      if (!resetPending) ++quality.resetsGap;
       countTime = false;
-    } else if (hasLast) {
-      if (dt > cfg.maxGapS || clockRestart) {
-        resetEstimators();
-        ++quality.resetsGap;
-        countTime = false;
-      } else if (isTeleport(s, dt)) {
+    }
+    // Before the gate, which depends on it: an estimate from gate-accepted samples only could
+    // never see noise above the current gate.
+    if (s.velocity) noise.add(s.t, *s.velocity);
+    SpikeGate::Verdict verdict = SpikeGate::Verdict::Accept;
+    if (hasLast && !resetPending && !gap) {
+      if (isTeleport(s, dt)) {
         discontinuity();
         ++quality.resetsTeleport;
-      } else if (isSpike(s, dt)) {
-        if (++consecutiveSpikes < kMaxConsecutiveSpikes) {
-          reject(&DataQuality::rejectedSpike);
-          return;
-        }
-        discontinuity();
-        ++quality.resetsTeleport;
+      } else {
+        verdict = applyGate(s, dt);
+        if (verdict == SpikeGate::Verdict::Reject) return;
       }
     }
     resetPending = false;
-    consecutiveSpikes = 0;
     const double stepDt = std::max(dt, 0.0);  // negative only on a clock restart
 
-    if (s.velocity) noise.add(s.t, *s.velocity);
-    selectWindows(s.velocity.has_value(), stepDt);
-    kinematics.add(s.t, s.position, s.velocity);
-    attitudes.push(s.t, s.attitude);
-    attitudes.trim(kinematics.windowS(), KinematicsEstimator::kMinPoints);
     hasLast = true;
     lastT = s.t;
     lastPos = s.position;
     lastVel = s.velocity;
+    selectWindows(stepDt);
+    addToWindow(s, verdict == SpikeGate::Verdict::Hold);
 
     // Start from the previous metrics so fields that can't be computed yet keep their
     // last value; `valid` tells consumers whether to trust them.
@@ -408,10 +419,9 @@ struct TelemetryPipeline::Impl {
     current = {};
     hasLast = false;
     resetPending = false;
-    consecutiveSpikes = 0;
     noise.reset();
-    adaptiveWindowS = 0.0;
-    selectWindows(false, 0.0);
+    idealWindowS = 0.0;
+    selectWindows(0.0);
     for (std::size_t i = 0; i < consumers.size(); ++i) consumers[i]->onReset();
   }
 };

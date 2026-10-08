@@ -22,15 +22,19 @@ struct RampResult {
   std::vector<double> g;
 };
 
-RampResult flyRamp(const PipelineConfig& cfg, double fps) {
+// velocityNoise: gaussian, per axis (m/s).
+RampResult flyRamp(const PipelineConfig& cfg, double fps, double velocityNoise = 0.0) {
   TelemetryPipeline p(cfg);
   GProfile prof(rampNz);
+  Gaussian noise(17);
   RampResult r;
   double lagSum = 0.0;
   int n = 0;
   for (int i = 0; i < static_cast<int>(3.0 * fps); ++i) {
     const double t = i / fps;
-    p.push(sampleAt(prof.trajectory(), t));
+    RawFlightSample s = sampleAt(prof.trajectory(), t);
+    *s.velocity += noise.vec(velocityNoise);
+    p.push(s);
     const FlightMetrics& m = p.snapshot().current;
     r.g.push_back(m.g);
     // Past the filters' start-up transient, before the top of the ramp (t = 2.7 s).
@@ -71,8 +75,9 @@ TEST_CASE("adaptive: noisy 60 Hz data gets a long window") {
   CHECK(snap.filter.adaptive);
   CHECK(snap.filter.sampleRateHz == Approx(60.0).epsilon(0.01));
   CHECK(snap.filter.velocityNoiseMS == Approx(0.2).epsilon(0.2));
-  CHECK(snap.filter.accelWindowS >= 0.08);
-  CHECK(snap.filter.accelWindowS <= PipelineConfig{}.adaptiveMaxWindowS);
+  // Converges to the fixed configuration (never longer: see the next test).
+  CHECK(snap.filter.accelWindowS == Approx(PipelineConfig{}.accelWindowS));
+  CHECK(snap.filter.smoothingTauS == Approx(PipelineConfig{}.smoothingTauS));
   CHECK(snap.quality.rejectedSpike == 0);
   CHECK(snap.current.g == Approx(1.0 / std::cos(75.0 * kDegToRad)).epsilon(0.05));
 }
@@ -97,13 +102,87 @@ TEST_CASE("adaptive off: the fixed config windows are used as-is") {
   CHECK(flyRamp(other, 240.0).g == r.g);
 }
 
+TEST_CASE("adaptive filtering is never slower than the fixed filter") {
+  // The window is capped at accelWindowS (unless 2.5 samples are longer: below 31 Hz, where
+  // both keep the same 3 samples) and tau at smoothingTauS, whatever the rate and noise.
+  const PipelineConfig cfg;
+  for (double fps : {30.0, 60.0, 240.0, 1000.0}) {
+    for (double sigma : {0.0, 0.05, 0.2, 0.5}) {
+      CAPTURE(fps);
+      CAPTURE(sigma);
+      TelemetryPipeline p;
+      Gaussian noise(3);
+      const Trajectory turn = levelTurn(60.0);
+      for (int i = 0; i < static_cast<int>(3.0 * fps); ++i) {
+        RawFlightSample s = sampleAt(turn, i / fps);
+        *s.velocity += noise.vec(sigma);
+        p.push(s);
+      }
+      const FilterState f = p.snapshot().filter;
+      CHECK(f.adaptive);
+      CHECK(f.accelWindowS <= std::max(cfg.accelWindowS, 2.5 / fps) + 1e-12);
+      CHECK(f.smoothingTauS <= cfg.smoothingTauS + 1e-12);
+      CHECK(f.onsetWindowS <= cfg.onsetWindowS + 1e-12);
+    }
+  }
+
+  // Lag on a 10 G/s ramp at 240 Hz. Moderate noise: a shorter window and tau than the fixed
+  // filter (measured ~66 vs ~95 ms). Heavy noise: the same windows as the fixed filter, so the
+  // very same output (it was ~10 ms slower before tau was capped).
+  PipelineConfig fixed;
+  fixed.adaptiveFiltering = false;
+  const RampResult moderate = flyRamp(cfg, 240.0, 0.05);
+  CHECK(moderate.filter.adaptive);
+  CHECK(moderate.lagS < flyRamp(fixed, 240.0, 0.05).lagS - 0.015);
+  const RampResult heavy = flyRamp(cfg, 240.0, 0.3);
+  CHECK(heavy.filter.accelWindowS == Approx(fixed.accelWindowS));
+  CHECK(heavy.filter.smoothingTauS == Approx(fixed.smoothingTauS));
+  CHECK(heavy.lagS <= flyRamp(fixed, 240.0, 0.3).lagS + 0.001);
+}
+
 TEST_CASE("adaptive: falls back to the fixed windows until the noise estimate is ready") {
   TelemetryPipeline p;
+  CHECK(p.snapshot().filter.input == FilterState::Input::None);
   for (int i = 0; i < 5; ++i) p.push(levelSample(i / 60.0));
-  const FilterState f = p.snapshot().filter;
+  FilterState f = p.snapshot().filter;
+  CHECK(f.input == FilterState::Input::Velocity);
+  CHECK_FALSE(f.noiseReady);
   CHECK_FALSE(f.adaptive);
   CHECK(f.accelWindowS == PipelineConfig{}.accelWindowS);
   CHECK(f.smoothingTauS == PipelineConfig{}.smoothingTauS);
+  for (int i = 5; i < 30; ++i) p.push(levelSample(i / 60.0));
+  f = p.snapshot().filter;
+  CHECK(f.noiseReady);
+  CHECK(f.adaptive);
+}
+
+TEST_CASE("frame-time jitter does not make the output flicker invalid") {
+  // Frame time uniform in [1/144, 1/30] s. The window keeps one sample older than its length
+  // while the rest span too little, so it never drops below what the estimate needs (before:
+  // ~5 % of the frames invalid, and the high-G time 3.3 % short of the fixed filter's).
+  const double nz = 8.0;
+  const Trajectory turn = levelTurn(std::acos(1.0 / nz) * kRadToDeg);
+  double highGS[2] = {};
+  for (int adaptive = 0; adaptive < 2; ++adaptive) {
+    CAPTURE(adaptive);
+    PipelineConfig cfg;
+    cfg.adaptiveFiltering = adaptive == 1;
+    TelemetryPipeline p(cfg);
+    RecordingConsumer c;
+    p.addConsumer(&c);
+    std::mt19937 rng(3);
+    std::uniform_real_distribution<double> frame(1.0 / 144.0, 1.0 / 30.0);
+    int invalid = 0;
+    for (double t = 0.0; t < 20.0; t += frame(rng)) {
+      p.push(sampleAt(turn, t));
+      if (t > 0.5 && !c.last.valid) ++invalid;
+    }
+    CHECK(invalid <= 2);  // measured 0
+    CHECK(p.snapshot().mission.highGEpisodes == 1);
+    highGS[adaptive] = p.snapshot().mission.totalHighGS;
+  }
+  CHECK(highGS[1] == Approx(highGS[0]).epsilon(0.01));
+  CHECK(highGS[1] > 19.8);
 }
 
 TEST_CASE("adaptive: position-only input keeps the fixed position window") {
@@ -113,32 +192,44 @@ TEST_CASE("adaptive: position-only input keeps the fixed position window") {
   fly(p, levelTurn(60.0), 0.0, 3.0, o);
   const FilterState f = p.snapshot().filter;
   CHECK_FALSE(f.adaptive);
+  CHECK(f.input == FilterState::Input::PositionOnly);
   CHECK(f.accelWindowS == PipelineConfig{}.accelWindowPositionOnlyS);
   CHECK(f.smoothingTauS == PipelineConfig{}.smoothingTauS);
   CHECK(p.snapshot().current.g == Approx(2.0).epsilon(0.01));
 }
 
 TEST_CASE("toggling adaptive filtering in setConfig does not reset the estimators") {
-  TelemetryPipeline p;
-  RecordingConsumer c;
-  p.addConsumer(&c);
-  double t = fly(p, levelTurn(60.0), 0.0, 3.0);
-  CHECK(p.snapshot().filter.adaptive);
-  const DataQuality q = p.snapshot().quality;
+  // At 240 Hz switching off grows the window from ~10 to 80 ms; it keeps reporting while it
+  // fills (the span requirement is a warm-up rule only).
+  for (double fps : {60.0, 240.0}) {
+    CAPTURE(fps);
+    TelemetryPipeline p;
+    RecordingConsumer c;
+    p.addConsumer(&c);
+    FlyOptions o;
+    o.fps = fps;
+    double t = fly(p, levelTurn(60.0), 0.0, 3.0, o);
+    CHECK(p.snapshot().filter.adaptive);
+    const DataQuality q = p.snapshot().quality;
 
-  PipelineConfig cfg = p.config();
-  for (bool on : {false, true, false}) {
-    CAPTURE(on);
-    cfg.adaptiveFiltering = on;
-    p.setConfig(cfg);
-    CHECK(p.snapshot().filter.adaptive == on);  // applies immediately
-    t = fly(p, levelTurn(60.0), t, t + 0.5 / 60.0);  // one sample
-    CHECK(c.last.valid);  // a reset would need several samples to become valid again
-    CHECK(c.last.g == Approx(2.0).epsilon(0.01));
-    // The noise statistics survive as well (adaptive windows are known at once).
-    CHECK(p.snapshot().filter.sampleRateHz == Approx(60.0).epsilon(0.01));
+    PipelineConfig cfg = p.config();
+    int invalid = 0;
+    for (bool on : {false, true, false}) {
+      CAPTURE(on);
+      cfg.adaptiveFiltering = on;
+      p.setConfig(cfg);
+      CHECK(p.snapshot().filter.adaptive == on);  // applies immediately
+      for (int i = 0; i < 20; ++i) {
+        t = fly(p, levelTurn(60.0), t, t + 0.5 / fps, o);  // one sample
+        invalid += c.last.valid ? 0 : 1;
+        CHECK(c.last.g == Approx(2.0).epsilon(0.01));
+      }
+      // The noise statistics survive as well (adaptive windows are known at once).
+      CHECK(p.snapshot().filter.sampleRateHz == Approx(fps).epsilon(0.01));
+    }
+    CHECK(invalid == 0);  // a reset would need several samples to become valid again
+    CHECK(c.resets == 0);
+    CHECK(p.snapshot().quality.accepted == q.accepted + 60);
+    CHECK(p.snapshot().quality.resetsGap == 0);
   }
-  CHECK(c.resets == 0);
-  CHECK(p.snapshot().quality.accepted == q.accepted + 3);
-  CHECK(p.snapshot().quality.resetsGap == 0);
 }

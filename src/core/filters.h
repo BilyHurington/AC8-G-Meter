@@ -1,6 +1,7 @@
 #pragma once
 // Small signal-processing building blocks used by the pipeline. All of them work with
 // variable frame time and allocate nothing per sample.
+#include <algorithm>
 #include <array>
 
 namespace ft {
@@ -76,12 +77,24 @@ class TimedWindow {
     if (count_ < Capacity) ++count_;
   }
 
-  // Drops samples older than windowS before the newest, but always keeps at least
-  // minCount so a low frame rate still yields an estimate.
-  void trim(double windowS, int minCount) {
+  // Drops samples older than windowS before the newest, but always keeps at least minCount
+  // (so a low frame rate still yields an estimate), and keeps one sample older than windowS
+  // while the others span less than minSpanS (so irregular frame times never leave a window
+  // too short for its estimate).
+  void trim(double windowS, int minCount, double minSpanS = 0.0) {
     if (count_ == 0) return;
     const double newest = time(count_ - 1);
-    while (count_ > minCount && newest - time(0) > windowS) --count_;
+    while (count_ > std::max(minCount, 1) && newest - time(0) > windowS && newest - time(1) >= minSpanS)
+      --count_;
+  }
+  // Drops samples older than t.
+  void trimBefore(double t) {
+    while (count_ > 0 && time(0) < t) --count_;
+  }
+  void popNewest() {
+    if (count_ == 0) return;
+    head_ = (head_ - 1 + Capacity) % Capacity;
+    --count_;
   }
 
   int size() const { return count_; }
@@ -89,23 +102,26 @@ class TimedWindow {
   double time(int i) const { return times_[index(i)]; }
   const T& value(int i) const { return values_[index(i)]; }
 
-  double meanTime() const {
+  // Mean time of the oldest n samples (default: all).
+  double meanTime(int n = -1) const {
+    n = clampCount(n);
     double sum = 0.0;
-    for (int i = 0; i < count_; ++i) sum += time(i);
-    return count_ > 0 ? sum / count_ : 0.0;
+    for (int i = 0; i < n; ++i) sum += time(i);
+    return n > 0 ? sum / n : 0.0;
   }
 
-  // Least-squares dv/dt over the window. Times are centred on their mean, so uneven
-  // spacing is handled exactly and large absolute timestamps lose no precision.
-  T slope() const {
-    if (count_ < 2) return T{};
-    const double tMean = meanTime();
+  // Least-squares dv/dt over the oldest n samples (default: all). Times are centred on their
+  // mean, so uneven spacing is handled exactly and large absolute timestamps lose no precision.
+  T slope(int n = -1) const {
+    n = clampCount(n);
+    if (n < 2) return T{};
+    const double tMean = meanTime(n);
     T vMean{};
-    for (int i = 0; i < count_; ++i) vMean = vMean + value(i);
-    vMean = vMean * (1.0 / count_);
+    for (int i = 0; i < n; ++i) vMean = vMean + value(i);
+    vMean = vMean * (1.0 / n);
     double stt = 0.0;
     T stv{};
-    for (int i = 0; i < count_; ++i) {
+    for (int i = 0; i < n; ++i) {
       const double dt = time(i) - tMean;
       stt += dt * dt;
       stv = stv + (value(i) - vMean) * dt;
@@ -115,6 +131,7 @@ class TimedWindow {
 
  private:
   int index(int i) const { return (head_ - count_ + i + Capacity) % Capacity; }
+  int clampCount(int n) const { return n < 0 || n > count_ ? count_ : n; }
 
   std::array<double, Capacity> times_{};
   std::array<T, Capacity> values_{};

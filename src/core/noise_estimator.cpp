@@ -6,7 +6,7 @@
 namespace ft {
 
 namespace {
-constexpr double kGaussianNorm3Median = 1.538;  // median of |x|, x ~ N(0, I3)
+constexpr double kGaussianNorm3Quartile = 1.101;  // lower quartile of |x|, x ~ N(0, I3)
 }
 
 void NoiseEstimator::reset() {
@@ -44,28 +44,43 @@ void NoiseEstimator::add(double t, const Vec3& velocity) {
 
 void NoiseEstimator::refresh() {
   // Entries within kSpanS of the newest one, newest first. Stops at older-than-span entries
-  // and at entries from before a clock restart (later timestamps).
-  const int newest = (head_ - 1 + kCapacity) % kCapacity;
-  int n = 0;
+  // and at entries from before a clock restart (later timestamps). nAttack / nInterval: how
+  // many of them fall within the short windows.
+  const double newestT = times_[entry(0)];
+  int n = 0, nAttack = 0, nInterval = 0;
   for (; n < count_; ++n) {
-    const int i = (newest - n + kCapacity) % kCapacity;
-    const double age = times_[newest] - times_[i];
+    const double age = newestT - times_[entry(n)];
     if (age < 0.0 || age > kSpanS) break;
-    scratch_[n] = residuals_[i];
+    if (age <= kAttackSpanS) ++nAttack;
+    if (age <= kIntervalSpanS) ++nInterval;
   }
   // Once ready, keep the last estimate until enough fresh residuals (e.g. after a pause).
   if (ready_ && n < kMinResiduals) return;
-  sigma_ = median(n) / kGaussianNorm3Median;
-  for (int k = 0; k < n; ++k) scratch_[k] = intervals_[(newest - k + kCapacity) % kCapacity];
-  interval_ = median(n);
+  nAttack = std::min(std::max(nAttack, kMinAttackResiduals), n);
+  nInterval = std::min(std::max(nInterval, kMinResiduals), n);
+
+  for (int k = 0; k < n; ++k) scratch_[k] = residuals_[entry(k)];
+  const double longQuartile = quantile(n, 0.25);
+  for (int k = 0; k < nAttack; ++k) scratch_[k] = residuals_[entry(k)];
+  sigma_ = std::max(longQuartile, quantile(nAttack, 0.25)) / kGaussianNorm3Quartile;
+  if (n < kMinProvisionalResiduals) sigma_ = 0.0;  // a single glitch would dominate
+
+  int m = 0;
+  for (int k = 0; k < nInterval; ++k)
+    if (intervals_[entry(k)] >= kNearDuplicateS) scratch_[m++] = intervals_[entry(k)];
+  if (m == 0) {  // nothing but near-duplicates: take them as they are
+    for (int k = 0; k < nInterval; ++k) scratch_[k] = intervals_[entry(k)];
+    m = nInterval;
+  }
+  interval_ = quantile(m, 0.5);
   ready_ = n >= kMinResiduals;
 }
 
-double NoiseEstimator::median(int n) {
+double NoiseEstimator::quantile(int n, double q) {
   if (n == 0) return 0.0;
-  const auto mid = scratch_.begin() + n / 2;
-  std::nth_element(scratch_.begin(), mid, scratch_.begin() + n);
-  return *mid;
+  const auto it = scratch_.begin() + static_cast<int>(q * n);
+  std::nth_element(scratch_.begin(), it, scratch_.begin() + n);
+  return *it;
 }
 
 }  // namespace ft

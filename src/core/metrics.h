@@ -91,18 +91,27 @@ struct DataQuality {
   std::uint64_t accepted = 0;
   std::uint64_t rejectedNonFinite = 0;   // NaN/Inf or degenerate attitude
   std::uint64_t rejectedTime = 0;        // dt <= 0 (duplicate / out-of-order timestamps)
-  std::uint64_t rejectedSpike = 0;       // inconsistent with the recent motion (spike gate)
+  // Inconsistent with the recent motion (spike gate). Includes samples removed from the
+  // window after the fact by the gate's look-back check; their metrics had already been
+  // published, so they are counted in `accepted` as well.
+  std::uint64_t rejectedSpike = 0;
   // Informational, not a rejection: accepted samples whose |load factor| exceeded
   // PipelineConfig::extremeGThreshold. There is no G cap; these are reported as measured.
   std::uint64_t extremeG = 0;
   std::uint64_t resetsGap = 0;           // dt too large (hitch, pause, load) -> estimators reset
   std::uint64_t resetsTeleport = 0;      // position jump inconsistent with velocity -> reset
+  // Velocity jump the position still agrees with (a step of more than spikeDeviationG in one
+  // frame): only the acceleration window restarts; no onReset, the high-G episode goes on.
+  std::uint64_t resetsJump = 0;
 };
 
 // The filter windows in use right now (see PipelineConfig::adaptiveFiltering).
 struct FilterState {
+  enum class Input : std::uint8_t { None, Velocity, PositionOnly };
+  Input input = Input::None;     // kind of the last accepted sample (None before any)
   double sampleRateHz = 0.0;     // measured input rate (velocity input), 0 until known
   double velocityNoiseMS = 0.0;  // measured per-axis velocity noise sigma, m/s
+  bool noiseReady = false;       // rate and noise measured; before that they are provisional
   double accelWindowS = 0.0;     // least-squares acceleration window
   double smoothingTauS = 0.0;    // EMA time constant on G
   double onsetWindowS = 0.0;     // least-squares window for the onset rate
