@@ -8,6 +8,7 @@
 // Both estimate the mean acceleration over the window, i.e. the acceleration at the
 // window's mean sample time (accelerationTime()), ~windowS / 2 before the newest sample.
 // Position-only input is much noisier to differentiate, so it gets its own (longer) window.
+#include <algorithm>
 #include <optional>
 
 #include "core/filters.h"
@@ -24,30 +25,41 @@ class KinematicsEstimator {
   //   - after a reset, no acceleration is reported until the window spans this much
   //     (warm-up only: a window that later grows, e.g. a longer adaptive window, keeps
   //     reporting while it fills);
-  //   - trimming keeps one sample older than the window while the rest span less than this,
-  //     so frame-time jitter never shrinks the fit below it.
+  //   - the window keeps one sample older than its length while the rest span less than
+  //     this, so frame-time jitter never shrinks the fit below it.
   static constexpr double kMinSpan = 0.6;
 
-  void setWindows(double velocityWindowS, double positionWindowS) {
+  // velocityHistoryS: velocity samples are kept this far back (at least the window), so that a
+  // longer velocity window takes effect at once (adaptive filtering raising it when the input
+  // turns noisy) instead of filling over its length.
+  void setWindows(double velocityWindowS, double positionWindowS, double velocityHistoryS = 0.0) {
     velocityWindowS_ = velocityWindowS;
     positionWindowS_ = positionWindowS;
+    velocityHistoryS_ = std::max(velocityHistoryS, velocityWindowS);
   }
   // Window length of the current input mode.
   double windowS() const { return mode_ == Mode::Position ? positionWindowS_ : velocityWindowS_; }
   void reset();
 
-  // Appends a sample. Switching between velocity and position input resets the window
-  // (the two estimates are not interchangeable mid-window). holdNewest (velocity input): the
-  // sample is suspect (SpikeGate): it is used for predictions, but the estimates (velocity(),
-  // acceleration(), ...) leave it out until the next add() or removeNewest().
-  void add(double t, const Vec3& position, const std::optional<Vec3>& velocity, bool holdNewest = false);
+  // Appends a sample and re-estimates. Switching between velocity and position input resets
+  // the window (the two estimates are not interchangeable mid-window).
+  void add(double t, const Vec3& position, const std::optional<Vec3>& velocity);
+  // Velocity input: appends a suspect sample (SpikeGate::Verdict::Hold). It is used for
+  // predictions, but the estimates (velocity(), acceleration(), ...) stay those from before it,
+  // and nothing is trimmed, until the next add() / commitHeld() (confirmed) or removeNewest()
+  // (a glitch). Ignored in position mode.
+  void addHeld(double t, const Vec3& velocity);
+  // Velocity input: the newest `held` samples, added with addHeld, are real after all (a
+  // velocity step): estimates as add() of the oldest of them would have given, so that a short
+  // window still contains the step. The others stay out of the estimates until the next add().
+  void commitHeld(int held);
 
   // Velocity input: removes the newest `count` samples (glitches found after the fact) and
   // re-estimates from the others. At least one sample is kept.
   void removeNewest(int count = 1);
 
   bool empty() const { return window_.size() == 0; }
-  int size() const { return window_.size(); }  // samples in the window
+  int size() const { return window_.size(); }  // samples kept (velocity: the history)
   double oldestTime() const { return window_.size() > 0 ? window_.time(0) : lastT_; }
   double lastTime() const { return lastT_; }
   bool hasVelocity() const { return hasVelocity_; }
@@ -56,8 +68,8 @@ class KinematicsEstimator {
   Vec3 acceleration() const { return accel_; }         // m/s^2, world frame
   double accelerationTime() const { return accelT_; }  // instant acceleration() refers to
 
-  // Velocity input: the velocity expected at time t from the newest sample and the current
-  // least-squares acceleration trend (also used before acceleration() is reported; constant
+  // Velocity input: the velocity expected at time t from the newest sample (held ones included)
+  // and the least-squares acceleration trend of the window ending at it (also used before acceleration() is reported; constant
   // velocity with a single sample), or nothing in position mode / with an empty window. Used
   // to reject spikes before they enter the window (one bad point would otherwise corrupt
   // every estimate it stays in).
@@ -76,13 +88,18 @@ class KinematicsEstimator {
 
  private:
   enum class Mode { Empty, Velocity, Position };
-  void estimateFromVelocity(bool holdNewest);
+  // Velocity window ending at sample `last`: its first sample. The samples within the window
+  // length of `last`, but at least kMinPoints, and one older while the others span less than
+  // kMinSpan of the window.
+  int windowStart(int last) const;
+  void estimateFromVelocity(int last);  // from the window ending at sample `last`
   void estimateFromPosition();
-  // Velocity at time t extrapolated from the oldest n window samples (n >= 1).
-  Vec3 extrapolateVelocity(int n, double t) const;
+  // Velocity at time t extrapolated from the window ending at sample `last`.
+  Vec3 extrapolateVelocity(int last, double t) const;
 
   double velocityWindowS_ = 0.08;
   double positionWindowS_ = 0.15;
+  double velocityHistoryS_ = 0.08;
   Mode mode_ = Mode::Empty;
   TimedWindow<Vec3> window_;  // velocities or positions depending on mode_
   double lastT_ = 0.0;

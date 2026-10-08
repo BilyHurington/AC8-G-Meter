@@ -15,6 +15,7 @@ struct ImFont;
 namespace ft {
 
 class IOverlayLayer;
+class MissionArchive;
 
 class TelemetryUi {
  public:
@@ -29,8 +30,8 @@ class TelemetryUi {
   // Handles hotkeys and draws all layers. `now` = monotonic seconds (for auto-save debounce).
   void frame(const MetricsSnapshot& snapshot, float screenW, float screenH, double now);
 
-  // True when the UI needs the mouse/keyboard: the menu is open, edit mode is on, or the
-  // mouse is over / interacting with the mission summary. Hosts forward input to the game
+  // True when the UI needs the mouse/keyboard: the menu or the mission history is open, edit
+  // mode is on, or the mouse is over / interacting with the mission summary. Hosts forward input to the game
   // only when this is false. Normal overlay mode never captures input, and the auto-shown
   // summary does not block the game (e.g. the results screen) unless the mouse is on it.
   // Thread-safe: the value is computed at the end of frame() (render thread) and cached,
@@ -43,6 +44,14 @@ class TelemetryUi {
   void setEditMode(bool on) { editMode_ = on; refreshWantsInput(); }
   bool summaryOpen() const { return summaryOpen_; }
   void showSummary(bool show) { summaryOpen_ = show; refreshWantsInput(); }
+  // Opened deliberately (menu / summary button), so it captures input like the menu.
+  bool historyOpen() const { return historyOpen_; }
+  void showHistory(bool show) { historyOpen_ = show; refreshWantsInput(); }
+
+  // Optional, not owned (must outlive this object or be reset to null first). With an archive,
+  // every finished mission with G data is saved when settings.history.saveMissions is on, and
+  // the mission history window is available. Call on the render thread, between frames.
+  void setMissionArchive(MissionArchive* archive) { archive_ = archive; }
 
   // Invoked after any setting that affects the pipeline changes (apply via toPipelineConfig).
   std::function<void(const Settings&)> onSettingsChanged;
@@ -57,11 +66,13 @@ class TelemetryUi {
   bool menuOpen_ = false;
   bool editMode_ = false;
   bool summaryOpen_ = false;
+  bool historyOpen_ = false;
+  MissionArchive* archive_ = nullptr;
   bool imguiWantsMouse_ = false;  // io.WantCaptureMouse at the end of the last frame()
   std::atomic<bool> wantsInput_{false};
 
   void refreshWantsInput() {
-    wantsInput_.store(menuOpen_ || editMode_ || (summaryOpen_ && imguiWantsMouse_),
+    wantsInput_.store(menuOpen_ || editMode_ || historyOpen_ || (summaryOpen_ && imguiWantsMouse_),
                       std::memory_order_relaxed);
   }
 };

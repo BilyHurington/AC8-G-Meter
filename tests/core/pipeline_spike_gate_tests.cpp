@@ -5,6 +5,7 @@
 #include <cmath>
 #include <random>
 
+#include "core/spike_gate.h"
 #include "flight_helpers.h"
 
 using namespace ft;
@@ -56,14 +57,17 @@ const auto constant3G = [](double) { return 3.0; };
 }  // namespace
 
 TEST_CASE("velocity glitches below the gate threshold never reach the display") {
-  // Each passes the gate (below spikeDeviationG * g0 * dt: 4.9 m/s at 60 Hz, 9.8 m/s at
-  // 30 Hz) but would read as 6 - 13 G in a 3-sample least-squares window. Before the
-  // look-back they showed as +5.8 G (3 m/s, 60 Hz), +8.7 G (4.5 m/s, 60 Hz), +7.7 G (8 m/s,
-  // 30 Hz) on the display.
+  // At 30 and 60 Hz each passes the gate (below spikeDeviationG * g0 * dt: 4.9 m/s at 60 Hz,
+  // 9.8 m/s at 30 Hz) but would read as 3 - 13 G in a 3-sample least-squares window; the
+  // look-back holds it (it misses the trend by more than 5 G in one step) and removes it when
+  // the next sample returns to the trend. Without the look-back they showed as +2.9 G (3 m/s,
+  // 30 Hz), +5.8 G (3 m/s, 60 Hz), +8.7 G (4.5 m/s, 60 Hz), +7.7 G (8 m/s, 30 Hz). At 240 Hz
+  // the gate itself rejects them.
   struct Case {
     double fps, glitchMS;
   };
-  for (const Case k : {Case{60.0, 3.0}, Case{60.0, 4.5}, Case{30.0, 4.5}, Case{30.0, 8.0}, Case{240.0, 3.0}}) {
+  for (const Case k : {Case{30.0, 3.0}, Case{30.0, 4.5}, Case{30.0, 8.0}, Case{60.0, 3.0}, Case{60.0, 4.5},
+                       Case{60.0, 8.0}, Case{240.0, 3.0}, Case{240.0, 4.5}, Case{240.0, 8.0}}) {
     CAPTURE(k.fps);
     CAPTURE(k.glitchMS);
     const int at = static_cast<int>(2.0 * k.fps);
@@ -72,7 +76,7 @@ TEST_CASE("velocity glitches below the gate threshold never reach the display") 
     });
     CHECK(r.maxErr < 0.1);  // measured 0.00
     CHECK(r.invalid == 0);
-    CHECK(r.snap.quality.rejectedSpike <= 1);  // removed from the window after the fact
+    CHECK(r.snap.quality.rejectedSpike == 1);  // rejected, or removed from the window after the fact
     CHECK(r.snap.quality.resetsJump == 0);
     CHECK(r.snap.quality.resetsTeleport == 0);
     CHECK(r.snap.mission.maxG == Approx(3.0).epsilon(0.01));
@@ -80,9 +84,10 @@ TEST_CASE("velocity glitches below the gate threshold never reach the display") 
 }
 
 TEST_CASE("frequent sub-threshold glitches: 10 % of samples +3 m/s at 60 Hz") {
-  // Single glitches and pairs are removed (a burst of 3 or more would read like a short real
-  // step). Before the look-back this read 2.57 G RMS; the fixed filter with a 5-sample median
-  // read 0.31 G.
+  // Bursts of up to SpikeGate::kMaxLookBack glitches are removed; a longer one reads like a
+  // real two-way velocity step and is shown (pipeline_lookback_tests), so the random bursts
+  // are capped at that length here (a longer one occurs about once in 10^4 samples). Before
+  // the look-back this read 2.57 G RMS; the fixed filter with a 5-sample median reads 0.002 G.
   PipelineConfig fixed;
   fixed.adaptiveFiltering = false;
   fixed.medianWindow = 5;
@@ -93,8 +98,11 @@ TEST_CASE("frequent sub-threshold glitches: 10 % of samples +3 m/s at 60 Hz") {
     double rms[2] = {};
     for (int k = 0; k < 2; ++k) {
       std::mt19937 rng(seed);
+      int burst = 0;
       const Run r = flyProfile(constant3G, 60.0, 8.0, [&](int, RawFlightSample& s) {
-        if (rng() % 10 == 0) s.velocity->z += 3.0;
+        const bool glitch = rng() % 10 == 0 && burst < SpikeGate::kMaxLookBack;
+        burst = glitch ? burst + 1 : 0;
+        if (glitch) s.velocity->z += 3.0;
       }, 0.5, k == 0 ? PipelineConfig{} : fixed);
       CHECK(r.invalid == 0);
       CHECK(r.snap.quality.resetsJump == 0);
@@ -105,10 +113,10 @@ TEST_CASE("frequent sub-threshold glitches: 10 % of samples +3 m/s at 60 Hz") {
     sumFixed += rms[1];
     worst = std::max(worst, rms[0]);
   }
-  // Measured: 0.000 G on every seed adaptive (the window stays short), 0.091 G mean fixed.
-  CHECK(sumAdaptive / kSeeds < 0.05);
-  CHECK(sumAdaptive < 0.5 * sumFixed);
-  CHECK(worst < 0.2);
+  // Measured: 0.000 G on every seed adaptive, 0.002 G mean fixed.
+  CHECK(sumAdaptive / kSeeds < 0.01);
+  CHECK(sumAdaptive <= sumFixed);
+  CHECK(worst < 0.05);
 }
 
 TEST_CASE("a real step of 15 - 30 G in one frame is accepted with one frame of delay") {
@@ -124,17 +132,20 @@ TEST_CASE("a real step of 15 - 30 G in one frame is accepted with one frame of d
 
 TEST_CASE("a step of more than 30 G in one frame is a velocity jump, not a discontinuity") {
   // 10 G -> 42 G -> 10 G: each step is rejected twice, then accepted as a jump. Only the
-  // acceleration window restarts (from the agreeing rejected samples): no onReset, valid
-  // throughout, and the high-G episode is not split (it was 3 episodes before).
+  // acceleration window restarts (from the agreeing rejected samples, which then count as
+  // accepted): no onReset, valid throughout, and the high-G episode is not split (it was 3
+  // episodes before).
   auto nz = [](double t) { return t < 2.0 ? 10.0 : (t < 2.5 ? 42.0 : 10.0); };
   const Run r = flyProfile(nz, 60.0, 5.0, [](int, RawFlightSample&) {});
-  CHECK(r.snap.quality.rejectedSpike == 4);
+  CHECK(r.snap.quality.rejectedSpike == 0);
+  CHECK(r.snap.quality.accepted == 300);
   CHECK(r.snap.quality.resetsJump == 2);
   CHECK(r.snap.quality.resetsTeleport == 0);
   CHECK(r.resets == 0);
   CHECK(r.invalid == 0);
   CHECK(r.snap.mission.highGEpisodes == 1);
-  CHECK(r.snap.mission.longestHighGS == Approx(4.9).epsilon(0.02));
+  // Live mission stats lag the G by 2 x minExcursionS (0.4 s) until the mission ends.
+  CHECK(r.snap.mission.longestHighGS == Approx(4.5).epsilon(0.02));
   CHECK(r.snap.mission.maxG == Approx(42.0).epsilon(0.01));
   CHECK(r.snap.current.g == Approx(10.0).epsilon(0.01));
 }
@@ -168,7 +179,7 @@ TEST_CASE("a noise step at 240 and 1000 Hz causes no reset storm") {
 TEST_CASE("glitches right after a reset are gated") {
   // The first samples after a reset have no trend yet: the second one is gated against the
   // first at constant velocity. A glitch as the very first sample is outvoted by the samples
-  // that follow (a run that agrees: restart from them).
+  // that follow (a run that agrees: restart from them, so they count as accepted).
   for (int k : {0, 1, 2, 3}) {
     CAPTURE(k);
     GProfile prof([](double t) { return 3.0 + 2.0 * std::sin(t); });
@@ -184,7 +195,10 @@ TEST_CASE("glitches right after a reset are gated") {
       if (i > 120 && c.last.valid) maxErr = std::max(maxErr, std::abs(c.last.g - (3.0 + 2.0 * std::sin(s.t))));
     }
     CHECK(maxErr < 0.3);  // measured 0.11
-    CHECK(p.snapshot().quality.rejectedSpike >= 1);
+    if (k == 0)
+      CHECK(p.snapshot().quality.resetsJump == 1);
+    else
+      CHECK(p.snapshot().quality.rejectedSpike >= 1);
     CHECK(p.snapshot().quality.resetsTeleport == 0);
     CHECK(c.resets == 1);  // reset() itself only
     CHECK(c.last.valid);

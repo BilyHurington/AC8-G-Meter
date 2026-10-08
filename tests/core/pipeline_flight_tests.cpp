@@ -239,7 +239,8 @@ TEST_CASE("persistent high G at 30 and 144 fps with uneven frame time") {
       CHECK(s.quality.resetsTeleport == 0);
       CHECK(s.quality.resetsGap == 0);
       CHECK(s.mission.highGEpisodes == 1);
-      CHECK(s.mission.longestHighGS > 3.5);
+      // Live mission stats lag the G by up to 2 x minExcursionS (0.4 s) until the mission ends.
+      CHECK(s.mission.longestHighGS > 3.1);
     }
   }
 }

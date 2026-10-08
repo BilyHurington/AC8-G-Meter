@@ -22,6 +22,8 @@ bool settingsFromJson(const std::string& json, Settings& out, std::string* error
 //   Windows %APPDATA%\AC8FlightTelemetry\settings.json (the UE4SS mod will pass its own path)
 //   other   $XDG_CONFIG_HOME or ~/.config/AC8FlightTelemetry/settings.json
 std::filesystem::path defaultSettingsPath();
+// Mission archive (ft::MissionArchive) next to the default settings file: ".../missions".
+std::filesystem::path defaultMissionsDir();
 
 // UTF-8 text for showing a path in ImGui or an error message. Never use path::string() for
 // that: on Windows it throws for characters outside the ANSI code page.

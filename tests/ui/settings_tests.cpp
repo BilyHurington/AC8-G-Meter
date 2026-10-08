@@ -43,10 +43,14 @@ TEST_CASE("settings defaults match the spec") {
   CHECK(s.hotkeys.toggleMenu.toString() == "Ctrl+F8");
   CHECK(s.hotkeys.toggleEditMode.toString() == "Ctrl+F9");
   CHECK(s.summary.autoShow);
+  CHECK(s.history.saveMissions);
+  CHECK(s.history.maxSavedMissions == 50);
   CHECK(s.metrics.gMode == GMode::Nz);
   CHECK(s.metrics.adaptiveFiltering);
   CHECK(s.metrics.adaptiveFiltering == PipelineConfig{}.adaptiveFiltering);
   CHECK(s.metrics.smoothingTauS == doctest::Approx(0.05));
+  CHECK(s.metrics.minExcursionS == doctest::Approx(PipelineConfig{}.minExcursionS));
+  CHECK(s.toPipelineConfig().minExcursionS == doctest::Approx(0.2));
 }
 
 TEST_CASE("default visible metrics are set by id") {
@@ -85,9 +89,12 @@ TEST_CASE("JSON round trip preserves every field") {
   s.metrics.smoothingTauS = 0.3f;
   s.metrics.highGEnter = 7.5f;
   s.metrics.highGExit = 6.0f;
+  s.metrics.minExcursionS = 0.35f;
   s.hotkeys.toggleMenu = Hotkey{"Insert", false, true, false};
   s.hotkeys.toggleEditMode = Hotkey{"K", true, true, true};
   s.summary.autoShow = false;
+  s.history.saveMissions = false;
+  s.history.maxSavedMissions = 7;
 
   const std::string json = settingsToJson(s);
   CHECK(json.find("\"#12AB7F\"") != std::string::npos);
@@ -129,8 +136,9 @@ TEST_CASE("out-of-range values are clamped") {
   REQUIRE(settingsFromJson(R"({
     "overlay": { "pos_x": -3, "pos_y": 7, "font_size_1080p": 500, "line_spacing": 0.2,
                  "opacity": 2, "shadow_alpha": -1, "background_alpha": 9, "text_color": "#zzzzzz" },
-    "metrics": { "smoothing_tau_s": 5, "high_g_enter": 20, "high_g_exit": 30 }
+    "metrics": { "smoothing_tau_s": 5, "high_g_enter": 20, "high_g_exit": 30, "min_excursion_s": 3 }
   })", s));
+  CHECK(s.metrics.minExcursionS == 0.5f);
   CHECK(s.overlay.posX == 0.0f);
   CHECK(s.overlay.posY == 1.0f);
   CHECK(s.overlay.fontSizeAt1080p == 64.0f);
@@ -142,6 +150,15 @@ TEST_CASE("out-of-range values are clamped") {
   CHECK(s.metrics.smoothingTauS == 1.0f);
   CHECK(s.metrics.highGEnter == 12.0f);
   CHECK(s.metrics.highGExit == doctest::Approx(11.9f));
+
+  Settings history;
+  REQUIRE(settingsFromJson(R"({ "history": { "save_missions": 0, "max_saved_missions": 1e12 } })", history));
+  CHECK(history.history.saveMissions);  // mistyped -> default
+  CHECK(history.history.maxSavedMissions == 1000);
+  REQUIRE(settingsFromJson(R"({ "history": { "max_saved_missions": -5 } })", history));
+  CHECK(history.history.maxSavedMissions == 0);
+  REQUIRE(settingsFromJson(R"({ "history": { "max_saved_missions": 12.6 } })", history));
+  CHECK(history.history.maxSavedMissions == 13);
 
   // Doubles far outside float range (and huge integers) must not hit float-conversion UB.
   Settings huge;

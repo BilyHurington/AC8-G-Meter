@@ -2,12 +2,18 @@
 // dynamic font atlas works (textures are "created" by flipping their status).
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
+#include <thread>
 
 #include <imgui.h>
 
 #include "config/hotkey_names.h"
+#include "storage/mission_archive.h"
+#include "ui/g_chart.h"
+#include "ui/mission_history.h"
+#include "ui/mission_summary.h"
 #include "ui/hotkey_input.h"
 #include "ui/layout.h"
 #include "ui/overlay_layer.h"
@@ -75,7 +81,10 @@ MetricsSnapshot fakeSnapshot(std::uint32_t reportId) {
     r->stats.durationS = 125.0;
     r->stats.timeInGBinS = {1, 2, 30, 50, 20, 10, 5, 3, 2, 1};
     r->stats.extremeGSamples = 42;
-    for (int i = 0; i < 1250; ++i) r->gTimeline.push_back(static_cast<float>(1.0 + 5.0 * ((i % 100) / 100.0)));
+    for (int i = 0; i < 2500; ++i) {
+      const float g = static_cast<float>(1.0 + 5.0 * ((i % 100) / 100.0));
+      r->trace.push({g, g - 0.2f, g + 0.4f, 2.0f, 8.0f, 250.0f, 3000.0f, g > 5.5f});
+    }
     s.lastReport = r;
   }
   return s;
@@ -291,4 +300,133 @@ TEST_CASE("leaving edit mode mid-drag keeps the dragged position") {
   CHECK(after.x == doctest::Approx(before.x + 150.0f).epsilon(0.01));
   CHECK(after.y == doctest::Approx(before.y + 80.0f).epsilon(0.01));
   CHECK(store.dirty());
+}
+
+namespace {
+
+std::filesystem::path freshArchiveDir(const char* name) {
+  const auto p = std::filesystem::path(FT_TEST_TMP_DIR) / "ui" / name;
+  std::error_code ec;
+  std::filesystem::remove_all(p, ec);
+  return p;
+}
+
+}  // namespace
+
+TEST_CASE("live missions are archived and the summary / history windows draw") {
+  HeadlessImGui im;
+  SettingsStore store(tmpSettings("history.json"));
+  TelemetryUi ui(store);
+  REQUIRE(ui.loadFonts(FT_SOURCE_DIR "/assets/fonts/B612Mono-Regular.ttf"));
+  MissionArchive archive(freshArchiveDir("history_archive"));
+  ui.setMissionArchive(&archive);
+  ImGuiIO& io = ImGui::GetIO();
+  double now = 0.0;
+
+  // Two finished missions arrive: each is saved once; the summary shows the save status.
+  MetricsSnapshot first = fakeSnapshot(1);
+  std::const_pointer_cast<MissionReport>(first.lastReport)->stats.hasGData = true;
+  for (int i = 0; i < 3; ++i) im.frame(ui, first, now += 1.0 / 60.0);
+  archive.flush();
+  CHECK(archive.lastSave().state == SaveStatus::State::Saved);
+  CHECK(archive.lastSave().report == first.lastReport);
+  MetricsSnapshot second = fakeSnapshot(2);
+  std::const_pointer_cast<MissionReport>(second.lastReport)->stats.hasGData = true;
+  for (int i = 0; i < 3; ++i) im.frame(ui, second, now += 1.0 / 60.0);
+  archive.flush();
+  CHECK(archive.index().entries.size() == 2);
+  CHECK(ui.summaryOpen());
+
+  // Mouse wheel / drag / double-click on the chart (it sits in the upper part of the summary).
+  io.AddMousePosEvent(960.0f, 420.0f);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  io.AddMouseWheelEvent(0.0f, 2.0f);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  io.AddMousePosEvent(900.0f, 420.0f);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  CHECK(ui.wantsInput());  // the mouse is on the summary
+
+  // The history window captures input like the menu, wherever the mouse is.
+  ui.showSummary(false);
+  ui.showHistory(true);
+  io.AddMousePosEvent(5.0f, 5.0f);
+  for (int i = 0; i < 3; ++i) im.frame(ui, second, now += 1.0 / 60.0);
+  CHECK(ui.wantsInput());
+  archive.flush();
+  for (int i = 0; i < 2; ++i) im.frame(ui, second, now += 1.0 / 60.0);
+  ui.showHistory(false);
+  im.frame(ui, second, now += 1.0 / 60.0);
+  CHECK_FALSE(ui.wantsInput());
+
+  // Saving off: nothing new is written.
+  store.settings().history.saveMissions = false;
+  for (int i = 0; i < 3; ++i) im.frame(ui, fakeSnapshot(3), now += 1.0 / 60.0);
+  archive.flush();
+  CHECK(archive.index().entries.size() == 2);
+}
+
+TEST_CASE("history window: clicking a row loads that mission without blocking") {
+  HeadlessImGui im;
+  MissionArchive archive(freshArchiveDir("history_click"));
+  for (std::uint32_t id = 1; id <= 3; ++id) {
+    auto r = std::make_shared<MissionReport>(*fakeSnapshot(id).lastReport);
+    r->label = "Simulator: DogfightMix";
+    archive.saveAsync(r);
+  }
+  archive.flush();
+  MissionHistoryWindow window;
+  bool open = true;
+  ImGuiIO& io = ImGui::GetIO();
+  GChart chart;
+
+  auto frame = [&] {
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    MissionHistoryWindow::Result r = window.draw(archive, open);
+    ImGui::Render();
+    if (ImDrawData* dd = ImGui::GetDrawData(); dd && dd->Textures)
+      for (ImTextureData* tex : *dd->Textures)
+        if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_Destroyed) tex->SetStatus(ImTextureStatus_OK);
+    return r;
+  };
+  for (int i = 0; i < 3; ++i) frame();
+  archive.flush();
+  for (int i = 0; i < 2; ++i) frame();
+
+  // Rows sit below the toolbar and the table header; scan down the window's left column.
+  const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
+  MissionHistoryWindow::Result loaded;
+  for (float y = centre.y - 300.0f; y < centre.y && !window.loading() && !loaded.report; y += 3.0f) {
+    io.AddMousePosEvent(centre.x - 200.0f, y);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    loaded = frame();
+  }
+  for (int i = 0; i < 500 && !loaded.report; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    loaded = frame();
+  }
+  REQUIRE(loaded.report);
+  CHECK(loaded.report->label == "Simulator: DogfightMix");
+  CHECK(loaded.report->trace.size() == 2500);
+  CHECK(loaded.entry.path.extension() == ".json");
+  CHECK_FALSE(window.loading());
+
+  // The loaded mission draws in the summary window (same code path as a live one).
+  bool summaryOpen = true;
+  for (int i = 0; i < 2; ++i) {
+    ImGui::NewFrame();
+    SummaryContext ctx;
+    ctx.subtitle = "from history";
+    ctx.status = "From the mission history";
+    drawMissionSummary(*loaded.report, ctx, chart, summaryOpen, nullptr);
+    ImGui::Render();
+  }
+  CHECK(summaryOpen);
 }

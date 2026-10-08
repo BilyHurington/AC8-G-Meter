@@ -1,6 +1,7 @@
 // High-G timer, mission state machine, statistics, history, consumers and config.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <numeric>
 
 #include "core/high_g_timer.h"
@@ -95,9 +96,15 @@ TEST_CASE("mission flow: start, pause excluded, one report, abort, ids") {
   CHECK(binSum <= r.stats.durationS + 1e-9);
   CHECK(binSum > r.stats.durationS - 0.2);
   CHECK(r.stats.timeInGBinS[gBinIndex(2.0)] == Approx(binSum));
-  CHECK(r.timelineHz == 10.0);
-  CHECK(std::abs(static_cast<double>(r.gTimeline.size()) - r.stats.durationS * 10.0) <= 2.0);
-  CHECK(r.gTimeline.back() == Approx(2.0).epsilon(1e-3));
+  CHECK(r.trace.hz == 20.0);
+  CHECK(r.trace.startS == 0.0);
+  CHECK(std::abs(static_cast<double>(r.trace.size()) - r.stats.durationS * 20.0) <= 2.0);
+  CHECK(r.trace.gMean.back() == Approx(2.0).epsilon(1e-3));
+  CHECK(r.trace.speed.back() == Approx(kSpeed).epsilon(1e-3));
+  CHECK(r.trace.altitude.back() == Approx(3000.0).epsilon(1e-3));
+  CHECK(r.gMode == GMode::Nz);
+  CHECK(r.highGEnter == 6.0);
+  CHECK(r.highGExit == 5.5);
   CHECK(r.stats.acceptedSamples == 300);  // 5 s at 60 fps, Active only
   CHECK(r.stats.rejectedSamples == 0);
   CHECK(r.stats.maxSpeed == Approx(kSpeed));
@@ -203,7 +210,7 @@ TEST_CASE("changing the G mode mid-mission restarts the G statistics only") {
   double t = fly(p, inverted, 0.0, 2.0);
   MissionStats s = p.snapshot().mission;
   CHECK(s.minG == Approx(-1.0).epsilon(1e-6));
-  CHECK(s.timeInGBinS[gBinIndex(-1.0)] > 1.9);
+  CHECK(s.timeInGBinS[gBinIndex(-1.0)] > 1.5);  // live stats lag by up to 2 x minExcursionS
 
   PipelineConfig cfg = p.config();
   cfg.gMode = GMode::Total;
@@ -220,15 +227,17 @@ TEST_CASE("changing the G mode mid-mission restarts the G statistics only") {
   s = r.stats;
   CHECK(s.minG == Approx(1.0).epsilon(1e-6));
   CHECK(s.maxG == Approx(1.0).epsilon(1e-6));
-  CHECK(s.minGAtS > r.timelineStartS);
+  CHECK(s.minGAtS > r.trace.startS);
   CHECK(s.timeInGBinS[gBinIndex(-1.0)] == 0.0);
   CHECK(s.timeInGBinS[gBinIndex(1.0)] == Approx(2.0).epsilon(0.05));
   // Kept: flight time, speed, sample counts.
   CHECK(s.durationS == Approx(4.0).epsilon(0.03));
   CHECK(s.maxSpeed == Approx(kSpeed));
   CHECK(s.acceptedSamples == 240);
-  // The timeline restarts where the mode changed.
-  CHECK(r.timelineStartS == Approx(2.0).epsilon(0.03));
-  CHECK(std::abs(static_cast<double>(r.gTimeline.size()) - (s.durationS - r.timelineStartS) * 10.0) <= 2.0);
-  CHECK(r.gTimeline.front() == Approx(1.0f));
+  CHECK(r.gMode == GMode::Total);
+  // The trace restarts where the mode changed, with |n| values only.
+  CHECK(r.trace.startS == Approx(2.0).epsilon(0.03));
+  CHECK(std::abs(static_cast<double>(r.trace.size()) - (s.durationS - r.trace.startS) * 20.0) <= 2.0);
+  CHECK(r.trace.gMean.front() == Approx(1.0f));
+  CHECK(*std::min_element(r.trace.gMin.begin(), r.trace.gMin.end()) == Approx(1.0f).epsilon(1e-3));
 }

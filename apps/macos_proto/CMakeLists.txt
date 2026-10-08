@@ -5,7 +5,7 @@ file(GLOB _proto_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.mm ${CMAKE
 add_executable(ft_macos_proto ${_proto_srcs}
   ${FT_IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
   ${FT_IMGUI_DIR}/backends/imgui_impl_metal.mm)
-target_link_libraries(ft_macos_proto PRIVATE ft_ui ft_sources ft_config ft_core imgui SDL3::SDL3
+target_link_libraries(ft_macos_proto PRIVATE ft_ui ft_sources ft_config ft_storage ft_core imgui SDL3::SDL3
   "-framework Metal" "-framework QuartzCore" "-framework Cocoa" "-framework ImageIO" "-framework CoreGraphics")
 # Third-party backends: ARC for the Metal one, and no first-party warning flags on either.
 set_source_files_properties(${FT_IMGUI_DIR}/backends/imgui_impl_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-w")

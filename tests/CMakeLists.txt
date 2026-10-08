@@ -13,6 +13,7 @@ endfunction()
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/test_tmp)
 ft_test_suite(core    ft_core)
 ft_test_suite(sources ft_sources)
+ft_test_suite(storage ft_storage)
 ft_test_suite(ui      ft_ui ft_config)
 
 # End-to-end regression: replay recorded flights and check estimates against ground truth.
@@ -21,3 +22,6 @@ foreach(_csv ${_replays})
   get_filename_component(_n ${_csv} NAME_WE)
   add_test(NAME replay_${_n} COMMAND replay_cli ${_csv} --check)
 endforeach()
+# --save-report writes a loadable mission archive pair (checked by its exit status).
+add_test(NAME replay_save_report COMMAND replay_cli ${CMAKE_SOURCE_DIR}/data/replays/dogfight_mix.csv
+         --save-report ${CMAKE_BINARY_DIR}/test_tmp/replay_archive)

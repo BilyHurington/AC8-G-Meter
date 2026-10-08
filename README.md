@@ -18,7 +18,10 @@
   - 正常模式下不拦截鼠标；
   - 编辑模式下可以拖动，支持位置锁定、字号、行距、透明度、颜色、背景设置，以及选择显示哪些指标。
 - **设置菜单：** 按快捷键打开。设置自动保存为 JSON，支持恢复默认值。
-- **任务总结：** 任务结束后自动弹出，内容包括最大/最小 G 及发生时刻、Onset 极值、最大 AoA、持续高 G 时间、G 区间停留时间直方图、G 时间曲线和数据质量统计。
+- **任务总结：** 任务结束后自动弹出，内容包括整场任务的 G 曲线、最大/最小 G 及发生时刻、Onset 极值、最大 AoA、持续高 G 时间、G 区间停留时间直方图和数据质量统计。
+  - G 曲线可交互：滚轮以光标为中心缩放，拖动平移，双击复位；悬停显示该时刻的 G（均值/最小/最大）、Onset、AoA、速度和高度。曲线以 20 Hz 记录，每格保留最小/最大值，单帧峰值不会因降采样丢失。浅色带为最小–最大范围，橙色区域为持续高 G 段，可叠加显示 Onset 或 AoA（右侧坐标轴）。
+  - **短促 G 尖峰过滤：** 设置菜单中的“Ignore G spikes shorter than”（默认 0.2 s，0 = 关闭）。持续时间短于该值的 G 突跳/突降（碰撞、物理抖动）不计入任务 MAX/MIN G、统计、高 G 段和保存的曲线；持续不短于该值的平台和阶跃原样保留。实时 G 读数不受影响，但叠加层上的 MAX/MIN G 会因此延迟最多约两倍该时长更新。
+- **任务历史：** 每场有 G 数据的任务结束后自动保存（可在设置菜单关闭，默认保留最近 50 场，0 = 全部保留）。从设置菜单或任务总结中的“Mission history...”打开历史窗口，点击任意一行即可重新打开该任务的总结和 G 曲线，也可以删除单条记录（需确认）。保存、读取和删除都在后台线程完成，不会卡住画面。
 
 ## 快捷键
 
@@ -59,6 +62,8 @@ Dear ImGui 1.92、nlohmann/json 和 doctest 会在配置时由 CMake 的 FetchCo
 | `--scenario SustainedTurn` | 选择模拟场景。可选值：LevelCruise / SustainedTurn / PullUpPushOver / DogfightMix / Manual |
 | `--size 1280x720` | 设置窗口尺寸 |
 | `--settings <file.json>` | 使用指定的设置文件。默认为 `~/Library/Application Support/AC8FlightTelemetry/settings.json` |
+| `--missions <dir>` | 任务历史目录。默认为设置文件旁的 `missions/` |
+| `--history` | 启动时打开任务历史窗口 |
 | `--menu` / `--edit` | 启动时直接打开设置菜单 / 进入编辑模式 |
 | `--end-mission-at <s>` | 在第 s 秒自动结束任务，并弹出任务总结 |
 | `--screenshot out.png --frames N` | 渲染 N 帧后截图并退出，用于自动化的视觉检查 |
@@ -74,6 +79,15 @@ Dear ImGui 1.92、nlohmann/json 和 doctest 会在配置时由 CMake 的 FetchCo
 - 对比真值和估计值；
 - 切换虚拟分辨率。
 
+## 任务历史文件
+
+默认保存在 `~/Library/Application Support/AC8FlightTelemetry/missions/`（Windows：`%APPDATA%\AC8FlightTelemetry\missions\`），每场任务两个文件，文件名以保存时刻（UTC）开头，例如 `20261008-140312_m3`：
+
+- `….trace.csv`：G 曲线，每 1/20 s 一行，列为 `t,g_mean,g_min,g_max,onset,aoa,speed,alt,high_g`（任务时间 s、G、G/s、度、m/s、m；`aoa` 为空表示无有效迎角）。开头的 `#` 行是说明。可直接用表格软件打开。
+- `….json`：任务摘要，包括保存时间、标签（如 `Simulator: Dogfight mix`）、G 模式、阈值、全部统计值、样本计数以及对应 CSV 的文件名。JSON 最后写入，两个文件都通过临时文件 + 重命名原子写入，中途崩溃不会留下残缺记录。
+
+`replay_cli <log.csv> --save-report <dir>` 可以把回放日志得到的任务以同样格式写入任意目录。
+
 ## 测试
 
 ```bash
@@ -82,7 +96,7 @@ ctest --test-dir build --output-on-failure
 
 测试包括：
 
-- core、sources、ui 三层各自的 doctest 单元测试；
+- core、sources、storage、ui 各层的 doctest 单元测试；
 - 对 `data/replays/*.csv` 中 6 份带真值的飞行日志做端到端回放回归检查（`replay_cli --check`）。
 
 单独回放一份日志并查看统计：
@@ -97,7 +111,8 @@ ctest --test-dir build --output-on-failure
 src/core      纯 C++20、零依赖：数学、滤波、运动学、指标、任务统计、TelemetryPipeline
 src/sources   质点飞行模型（带真值）、模拟数据源、CSV 回放与录制
 src/config    设置模型与 JSON 持久化（宽松读取、范围钳制、原子写入、防抖保存）
-src/ui        仅依赖 Dear ImGui：HUD 叠加层、设置菜单、任务总结、布局计算
+src/storage   任务历史：任务保存为 JSON + CSV、列表、读取、删除、保留数量上限（后台工作线程）
+src/ui        仅依赖 Dear ImGui：HUD 叠加层、设置菜单、任务总结与 G 曲线、任务历史窗口、布局计算
 apps/macos_proto  SDL3 + Metal 宿主：模拟的游戏画面和调试面板
 apps/replay_cli   无界面回放、统计、回归检查、日志生成
 apps/latency_bench  不同采样率与噪声下 G 显示延迟/误差基准（自适应 vs 固定滤波）
@@ -106,7 +121,7 @@ data/replays  参考飞行日志
 assets/fonts  B612 Mono（SIL OFL 1.1）
 ```
 
-各层依赖关系：`core ← sources`，`core ← config ← ui`。core、config、ui 将来直接复用到 UE4SS Mod 中，只需新增 Windows 专用的数据源（`ITelemetrySource`）和 DX Present Hook 宿主。
+各层依赖关系：`core ← sources`，`core ← config ← ui`，`core ← storage ← ui`。core、config、storage、ui 将来直接复用到 UE4SS Mod 中，只需新增 Windows 专用的数据源（`ITelemetrySource`）和 DX Present Hook 宿主。
 
 ## 扩展点
 

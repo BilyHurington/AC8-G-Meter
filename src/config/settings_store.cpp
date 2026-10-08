@@ -29,6 +29,13 @@ void readFloat(const json& obj, const char* key, float& out) {
   if (std::isfinite(v)) out = static_cast<float>(std::clamp(v, -1.0e6, 1.0e6));
 }
 
+void readInt(const json& obj, const char* key, int& out) {
+  const auto it = obj.find(key);
+  if (it == obj.end() || !it->is_number()) return;
+  const double v = it->get<double>();  // as double: 1e30 or 2.5 must not be UB / rejected
+  if (std::isfinite(v)) out = static_cast<int>(std::clamp(std::round(v), -1.0e6, 1.0e6));
+}
+
 void readBool(const json& obj, const char* key, bool& out) {
   const auto it = obj.find(key);
   if (it != obj.end() && it->is_boolean()) out = it->get<bool>();
@@ -127,11 +134,14 @@ std::string settingsToJson(const Settings& s) {
         {"adaptive_filtering", s.metrics.adaptiveFiltering},
         {"smoothing_tau_s", s.metrics.smoothingTauS},
         {"high_g_enter", s.metrics.highGEnter},
-        {"high_g_exit", s.metrics.highGExit}}},
+        {"high_g_exit", s.metrics.highGExit},
+        {"min_excursion_s", s.metrics.minExcursionS}}},
       {"hotkeys",
        {{"toggle_menu", s.hotkeys.toggleMenu.toString()},
         {"toggle_edit_mode", s.hotkeys.toggleEditMode.toString()}}},
       {"summary", {{"auto_show", s.summary.autoShow}}},
+      {"history",
+       {{"save_missions", s.history.saveMissions}, {"max_saved_missions", s.history.maxSavedMissions}}},
   };
   // error_handler_t::replace: never throws on invalid UTF-8 (this runs from the UI frame).
   return root.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
@@ -178,6 +188,7 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
     readFloat(*m, "smoothing_tau_s", out.metrics.smoothingTauS);
     readFloat(*m, "high_g_enter", out.metrics.highGEnter);
     readFloat(*m, "high_g_exit", out.metrics.highGExit);
+    readFloat(*m, "min_excursion_s", out.metrics.minExcursionS);
     const auto adaptive = m->find("adaptive_filtering");
     if (version < 2 && (adaptive == m->end() || !adaptive->is_boolean())) migrateV1Metrics(out.metrics);
   }
@@ -186,6 +197,10 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
     readHotkey(*h, "toggle_edit_mode", out.hotkeys.toggleEditMode);
   }
   if (const json* sm = section(root, "summary")) readBool(*sm, "auto_show", out.summary.autoShow);
+  if (const json* hi = section(root, "history")) {
+    readBool(*hi, "save_missions", out.history.saveMissions);
+    readInt(*hi, "max_saved_missions", out.history.maxSavedMissions);
+  }
 
   out.clamp();
   return true;
@@ -240,6 +255,8 @@ bool saveSettings(const std::filesystem::path& path, const Settings& settings,
   }
   return true;
 }
+
+std::filesystem::path defaultMissionsDir() { return defaultSettingsPath().parent_path() / "missions"; }
 
 std::filesystem::path defaultSettingsPath() {
   namespace fs = std::filesystem;

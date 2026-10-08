@@ -70,6 +70,8 @@ struct MetricsSettings {
   float smoothingTauS = 0.05f;    // keep equal to PipelineConfig::smoothingTauS
   float highGEnter = 6.0f;
   float highGExit = 5.5f;
+  // Mission statistics and the saved G curve ignore bumps / dips shorter than this (0 = off).
+  float minExcursionS = 0.2f;  // keep equal to PipelineConfig::minExcursionS
   bool operator==(const MetricsSettings&) const = default;
 };
 
@@ -93,6 +95,12 @@ struct SummarySettings {
   bool operator==(const SummarySettings&) const = default;
 };
 
+struct HistorySettings {
+  bool saveMissions = true;    // archive every finished mission (MissionArchive)
+  int maxSavedMissions = 50;   // oldest deleted beyond this; 0 = keep all
+  bool operator==(const HistorySettings&) const = default;
+};
+
 struct Settings {
   // 2: adaptive filtering (version 1 files are migrated on load, see settings_store.cpp).
   static constexpr int kVersion = 2;
@@ -101,6 +109,7 @@ struct Settings {
   MetricsSettings metrics;
   HotkeySettings hotkeys;
   SummarySettings summary;
+  HistorySettings history;
 
   // Forces every field into its valid range (ranges documented in settings.cpp).
   void clamp();

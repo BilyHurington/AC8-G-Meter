@@ -137,3 +137,35 @@ TEST_CASE("NoiseEstimator: near-duplicate timestamps are not the sample rate") {
   CHECK(est->sampleInterval() == Approx(1.0 / 60.0).epsilon(0.01));
   CHECK(est->sigma() < 0.005);
 }
+
+TEST_CASE("NoiseEstimator: noise on one axis only reads as that axis's sigma") {
+  // A quantile of the 3-D residual norm diluted it with the two clean axes (0.5 read as 0.14).
+  for (double fps : {60.0, 240.0, 1000.0}) {
+    CAPTURE(fps);
+    auto est = std::make_unique<NoiseEstimator>();
+    const Trajectory turn = levelTurn(60.0);
+    Gaussian noise(4);
+    for (int i = 0; i < static_cast<int>(5.0 * fps); ++i) {
+      const double t = i / fps;
+      Vec3 v = turn(t).velocity;
+      v.z += noise(0.5);
+      est->add(t, v);
+    }
+    CHECK(est->sigma() == Approx(0.5).epsilon(0.2));
+  }
+}
+
+TEST_CASE("NoiseEstimator: a G onset is not noise") {
+  // 1 -> 12 G at 11 G/s, clean, 60 Hz: the residual against the quadratic through three
+  // samples cancels the constant jerk (against the line through two neighbours it read
+  // 0.04 m/s, which lengthened the window during every onset).
+  GProfile prof([](double t) { return std::clamp(1.0 + 11.0 * (t - 1.0), 1.0, 12.0); });
+  auto est = std::make_unique<NoiseEstimator>();
+  double worst = 0.0;
+  for (int i = 0; i < 180; ++i) {
+    const double t = i / 60.0;
+    est->add(t, prof.at(t).velocity);
+    if (est->ready()) worst = std::max(worst, est->sigma());
+  }
+  CHECK(worst < 0.005);
+}

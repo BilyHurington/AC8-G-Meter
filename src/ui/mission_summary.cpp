@@ -8,12 +8,14 @@
 #include <imgui.h>
 
 #include "ui/format.h"
+#include "ui/g_chart.h"
+#include "ui/style.h"
 
 namespace ft {
 namespace {
 
-constexpr ImVec4 kAccent{0.576f, 0.965f, 0.659f, 1.0f};
-constexpr ImVec4 kWarn{1.0f, 0.62f, 0.35f, 1.0f};
+constexpr ImVec4 kAccent = kHudAccent;
+constexpr ImVec4 kWarn = kHudWarn;
 
 void row(const char* label, const std::string& value, const std::string& detail = {}) {
   ImGui::TableNextRow();
@@ -62,83 +64,57 @@ void histogram(const MissionStats& st) {
     char overlay[48];
     std::snprintf(overlay, sizeof overlay, "%.1f s  (%.0f%%)", secs, 100.0 * static_cast<double>(frac));
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, i >= 5 ? kWarn : kAccent);  // bins from 5 G up
-    ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
+    ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight()), overlay);  // compact rows
     ImGui::PopStyleColor();
   }
 }
 
-void timeline(const MissionReport& report, float highGEnter) {
-  const std::vector<float>& g = report.gTimeline;
-  if (g.size() < 2) {
-    ImGui::TextDisabled("No timeline recorded.");
-    return;
-  }
-  const auto [lo, hi] = std::minmax_element(g.begin(), g.end());
-  const float scaleMin = std::min(*lo, 0.0f) - 0.5f;
-  const float scaleMax = std::max(*hi, highGEnter) + 0.5f;
-  const float height = ImGui::GetFontSize() * 7.0f;
-  ImGui::PushStyleColor(ImGuiCol_PlotLines, kAccent);
-  ImGui::PlotLines("##ft_g_timeline", g.data(), static_cast<int>(g.size()), 0, nullptr, scaleMin,
-                   scaleMax, ImVec2(-FLT_MIN, height));
-  ImGui::PopStyleColor();
-
-  // Reference lines drawn over the plot's inner area (frame rect minus frame padding).
-  const ImVec2 pad = ImGui::GetStyle().FramePadding;
-  const ImVec2 mn(ImGui::GetItemRectMin().x + pad.x, ImGui::GetItemRectMin().y + pad.y);
-  const ImVec2 mx(ImGui::GetItemRectMax().x - pad.x, ImGui::GetItemRectMax().y - pad.y);
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  auto yFor = [&](float v) { return mx.y - (v - scaleMin) / (scaleMax - scaleMin) * (mx.y - mn.y); };
-  const float yThr = yFor(highGEnter);
-  dl->AddLine(ImVec2(mn.x, yThr), ImVec2(mx.x, yThr), ImGui::GetColorU32(ImVec4(kWarn.x, kWarn.y, kWarn.z, 0.7f)));
-  char label[32];
-  std::snprintf(label, sizeof label, "high-G %.1f", static_cast<double>(highGEnter));
-  dl->AddText(ImVec2(mn.x + 4.0f, yThr - ImGui::GetFontSize() - 1.0f), ImGui::GetColorU32(kWarn), label);
-  const float y1 = yFor(1.0f);
-  dl->AddLine(ImVec2(mn.x, y1), ImVec2(mx.x, y1), ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.5f));
-
-  // The timeline starts at timelineStartS (non-zero after a mid-mission G mode change).
-  const double startS = report.timelineStartS;
-  const double endS = startS + static_cast<double>(g.size() - 1) / report.timelineHz;
-  ImGui::TextDisabled("%s", formatClock(startS).c_str());
-  const std::string end = formatClock(endS);
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(end.c_str()).x);
-  ImGui::TextDisabled("%s", end.c_str());
-}
-
 }  // namespace
 
-void drawMissionSummary(const MissionReport& report, const Settings& settings, bool& open,
-                        ImFont* titleFont) {
-  if (!open) return;
+SummaryResult drawMissionSummary(const MissionReport& report, const SummaryContext& context, GChart& chart,
+                                 bool& open, ImFont* titleFont) {
+  SummaryResult result;
+  if (!open) return result;
   const float fs = ImGui::GetFontSize();
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSize(ImVec2(fs * 34.0f, 0.0f), ImGuiCond_Appearing);
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(ImVec2(std::min(fs * 62.0f, vp->WorkSize.x * 0.92f), std::min(fs * 60.0f, vp->WorkSize.y * 0.92f)),
+                           ImGuiCond_Appearing);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(fs * 34.0f, fs * 24.0f), ImVec2(FLT_MAX, FLT_MAX));
   ImGui::SetNextWindowBgAlpha(1.0f);   // readable over a busy results screen
   char title[64];
   std::snprintf(title, sizeof title, "Mission %u summary###ft_summary", report.id);
   // NoFocusOnAppearing: popping up at mission end must not take keyboard focus from the game.
   if (!ImGui::Begin(title, &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse |
-                                      ImGuiWindowFlags_AlwaysAutoResize |
                                       ImGuiWindowFlags_NoFocusOnAppearing)) {
     ImGui::End();
-    return;
+    return result;
   }
-  // AlwaysAutoResize: keep the width stable by reserving it explicitly.
-  ImGui::Dummy(ImVec2(fs * 32.0f, 0.0f));
 
   const MissionStats& st = report.stats;
   ImGui::PushFont(titleFont, ImGui::GetStyle().FontSizeBase * 1.6f);  // size before style scaling
   ImGui::TextColored(kAccent, "MISSION %u DEBRIEF", report.id);
   ImGui::PopFont();
+  if (!context.subtitle.empty()) ImGui::TextDisabled("%s", context.subtitle.c_str());
   if (report.aborted) ImGui::TextColored(kWarn, "Mission aborted (left before the results screen)");
   if (!st.hasData) {
     ImGui::TextDisabled("No flight data was recorded during this mission.");
   } else {
-    statsTable(st);
-    ImGui::SeparatorText("Time at G");
-    histogram(st);
-    ImGui::SeparatorText("G over time");
-    timeline(report, settings.metrics.highGEnter);
+    // The chart takes ~40% of the window; statistics and histogram share the row below.
+    // (38%: at the default size everything down to the buttons fits without scrolling.)
+    ImGui::SeparatorText(report.gMode == GMode::Total ? "G over time (total |n|)" : "G over time (Nz)");
+    chart.draw(report, ImVec2(0.0f, std::max(fs * 11.0f, ImGui::GetWindowHeight() * 0.38f)));
+    if (ImGui::BeginTable("##ft_summary_cols", 2, ImGuiTableFlags_SizingStretchProp)) {
+      ImGui::TableSetupColumn("stats", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+      ImGui::TableSetupColumn("bins", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+      ImGui::TableNextColumn();
+      ImGui::SeparatorText("Statistics");
+      statsTable(st);
+      ImGui::TableNextColumn();
+      ImGui::SeparatorText("Time at G");
+      histogram(st);
+      ImGui::EndTable();
+    }
   }
 
   ImGui::SeparatorText("Data quality");
@@ -149,9 +125,23 @@ void drawMissionSummary(const MissionReport& report, const Settings& settings, b
     ImGui::Text("%llu extreme-G samples (> %s G)", static_cast<unsigned long long>(st.extremeGSamples),
                 formatNumber(report.extremeGThreshold, 0, false).c_str());
 
+  if (!context.status.empty()) {
+    const ImVec4 tone = context.statusTone == SummaryContext::Tone::Error  ? kHudError
+                        : context.statusTone == SummaryContext::Tone::Busy ? kWarn
+                                                                           : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, tone);
+    ImGui::TextWrapped("%s", context.status.c_str());
+    ImGui::PopStyleColor();
+  }
+
   ImGui::Spacing();
   if (ImGui::Button("Close", ImVec2(fs * 6.0f, 0.0f))) open = false;
+  if (context.canOpenHistory) {
+    ImGui::SameLine();
+    if (ImGui::Button("Mission history...")) result.openHistory = true;
+  }
   ImGui::End();
+  return result;
 }
 
 }  // namespace ft

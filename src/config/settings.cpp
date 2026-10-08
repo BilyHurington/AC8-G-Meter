@@ -76,6 +76,8 @@ void clampColor(Color& c) {
 //   metrics.smoothingTauS   [0, 1]     s
 //   metrics.highGEnter      [2, 12]    G
 //   metrics.highGExit       [1, highGEnter - 0.1] G (hysteresis must stay positive)
+//   metrics.minExcursionS   [0, 0.5]   s (0 = off)
+//   history.maxSavedMissions [0, 1000] (0 = unlimited)
 //   hotkeys                 unknown key name -> default binding
 void Settings::clamp() {
   const OverlaySettings od;
@@ -93,6 +95,9 @@ void Settings::clamp() {
   metrics.smoothingTauS = clampf(metrics.smoothingTauS, 0.0f, 1.0f, md.smoothingTauS);
   metrics.highGEnter = clampf(metrics.highGEnter, 2.0f, 12.0f, md.highGEnter);
   metrics.highGExit = clampf(metrics.highGExit, 1.0f, metrics.highGEnter - 0.1f, md.highGExit);
+  metrics.minExcursionS = clampf(metrics.minExcursionS, 0.0f, 0.5f, md.minExcursionS);
+
+  history.maxSavedMissions = std::clamp(history.maxSavedMissions, 0, 1000);
 
   const HotkeySettings hd;
   if (!isKnownHotkeyName(hotkeys.toggleMenu.key)) hotkeys.toggleMenu = hd.toggleMenu;
@@ -107,6 +112,7 @@ PipelineConfig Settings::toPipelineConfig(PipelineConfig base) const {
   base.smoothingTauS = metrics.smoothingTauS;
   base.highGEnter = metrics.highGEnter;
   base.highGExit = metrics.highGExit;
+  base.minExcursionS = metrics.minExcursionS;
   return base;
 }
 

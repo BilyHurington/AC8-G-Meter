@@ -9,6 +9,7 @@
 #include "core/filters.h"
 #include "core/high_g_timer.h"
 #include "core/kinematics.h"
+#include "core/mission_feed.h"
 #include "core/mission_tracker.h"
 #include "core/noise_estimator.h"
 #include "core/sanitizer.h"
@@ -43,6 +44,10 @@ struct TelemetryPipeline::Impl {
   std::array<Smoother, 3> bodySmooth;  // Nx, Ny, Nz; `g` is derived from these
   TimedWindow<double> onsetWindow;
   SpikeGate gate;
+  // Whether each sample the gate may still reclassify (its held samples, its rejected run) was
+  // counted in the open mission. Cleared on every phase change, after which it was not.
+  std::array<bool, SpikeGate::kMaxLookBack> heldInMission{};
+  std::array<bool, SpikeGate::kRunLength> runInMission{};
   // Velocity input noise and sample rate: a property of the source, so it survives estimator
   // resets (cleared only by reset()). Shared by the spike gate and the adaptive windows.
   NoiseEstimator noise;
@@ -51,6 +56,7 @@ struct TelemetryPipeline::Impl {
 
   HighGTimer highG;
   MissionTracker mission;
+  MissionFeed missionFeed;  // valid metrics -> excursion filter -> mission
 
   // Last accepted sample (survives estimator resets; needed for dt and teleport checks).
   bool hasLast = false;
@@ -62,6 +68,7 @@ struct TelemetryPipeline::Impl {
   FlightMetrics current;
   MissionPhase phase = MissionPhase::None;
   std::shared_ptr<const MissionReport> lastReport;
+  std::string missionLabel;
   RecentHistory recent;
   double recentAccumS = 0.0;
   DataQuality quality;
@@ -73,6 +80,7 @@ struct TelemetryPipeline::Impl {
 
   void applyConfig(bool resize) {
     highG.setThresholds(cfg.highGEnter, cfg.highGExit);
+    missionFeed.configure(cfg, mission);
     if (resize) {
       for (Smoother& s : bodySmooth) s.configure(cfg.medianWindow, cfg.smoothingTauS);
       resetEstimators();
@@ -103,7 +111,7 @@ struct TelemetryPipeline::Impl {
   // estimator state: every window trims by time, so a new length applies from the next sample.
   void selectWindows(double stepDt) {
     const double dt = noise.sampleInterval();
-    const double minWindowS = kAdaptiveMinWindowSamples * dt;
+    const double minWindowS = std::max(kAdaptiveMinWindowSamples * dt, cfg.adaptiveMinWindowS);
     filter.input = inputKind();
     const bool velocityInput = filter.input != FilterState::Input::PositionOnly;
     if (velocityInput && noise.ready() && dt > 0.0 && cfg.adaptiveTargetG > 0.0) {
@@ -138,8 +146,9 @@ struct TelemetryPipeline::Impl {
       filter.smoothingTauS = cfg.smoothingTauS;
       filter.onsetWindowS = cfg.onsetWindowS;
     }
+    // Adaptive: keep the samples of the longest window, so that a raise applies at once.
     kinematics.setWindows(velocityInput ? filter.accelWindowS : cfg.accelWindowS,
-                          cfg.accelWindowPositionOnlyS);
+                          cfg.accelWindowPositionOnlyS, filter.adaptive ? cfg.adaptiveMaxWindowS : 0.0);
     for (Smoother& s : bodySmooth) s.setTau(filter.smoothingTauS);
   }
 
@@ -147,6 +156,7 @@ struct TelemetryPipeline::Impl {
   // extremes, histogram, high-G episodes or history.
   void resetGStats() {
     if (mission.open()) mission.resetGStats();
+    missionFeed.clear();
     highG.reset();
     recent.clear();
     recentAccumS = 1.0 / recent.sampleHz;
@@ -168,6 +178,10 @@ struct TelemetryPipeline::Impl {
     // Game time stops while paused, so the first post-pause dt can look perfectly
     // normal even though the aircraft state jumped: always restart the estimators.
     if (prev == MissionPhase::Paused && next != MissionPhase::Paused) resetPending = true;
+    if (next != prev) {
+      heldInMission.fill(false);
+      runInMission.fill(false);
+    }
 
     switch (next) {
       case MissionPhase::Active:
@@ -185,71 +199,143 @@ struct TelemetryPipeline::Impl {
   }
 
   void startMission() {
-    mission.start(cfg.timelineHz);
+    mission.start(cfg.traceHz);
+    missionFeed.clear();
     highG.reset();
     for (std::size_t i = 0; i < consumers.size(); ++i) consumers[i]->onMissionStarted();
   }
 
   void finishMission(bool aborted) {
+    missionFeed.flush(mission);  // the samples still inside the excursion filter
     MissionReport r = mission.finish(aborted);
+    r.gMode = cfg.gMode;
+    r.highGEnter = cfg.highGEnter;
+    r.highGExit = cfg.highGExit;
     r.extremeGThreshold = cfg.extremeGThreshold;
+    r.label = missionLabel;
     auto report = std::make_shared<const MissionReport>(std::move(r));
     lastReport = report;
     for (std::size_t i = 0; i < consumers.size(); ++i) consumers[i]->onMissionEnded(*report);
   }
 
-  // ---- per-sample processing ------------------------------------------------------
+  // ---- sample counts --------------------------------------------------------------
+  // Every sample pushed outside a pause is counted once, as accepted or as rejected, in
+  // DataQuality and, while Active, in the mission. The spike gate may revise its verdict on a
+  // sample later (look-back: held samples were a glitch; jump: a rejected run is used), and
+  // the counts follow, so accepted + rejected always equals the samples pushed.
+
+  bool countsInMission() const { return phase == MissionPhase::Active; }
 
   void reject(std::uint64_t DataQuality::*counter) {
     ++(quality.*counter);
-    if (phase == MissionPhase::Active) mission.countRejected();
+    if (countsInMission()) mission.countRejected();
   }
 
-  // Runs the spike gate (SpikeGate) and applies its verdict to the window; the caller drops
-  // the sample on Reject and adds it otherwise.
+  void countAccepted(SpikeGate::Verdict verdict) {
+    ++quality.accepted;
+    if (countsInMission()) mission.countAccepted();
+    if (verdict == SpikeGate::Verdict::Hold)
+      heldInMission[static_cast<std::size_t>(gate.held() - 1)] = countsInMission();
+  }
+
+  void recountAsRejected(bool inMission) {
+    --quality.accepted;
+    ++quality.rejectedSpike;
+    if (inMission && mission.open()) {
+      mission.uncountAccepted();
+      mission.countRejected();
+    }
+  }
+
+  void recountAsAccepted(bool inMission) {
+    --quality.rejectedSpike;
+    ++quality.accepted;
+    if (inMission && mission.open()) {
+      mission.uncountRejected();
+      mission.countAccepted();
+    }
+  }
+
+  // ---- spike gate -----------------------------------------------------------------
+
+  // Runs the spike gate (SpikeGate) and makes the window match its verdict. The caller drops
+  // the sample on Reject and adds it otherwise (addToWindow).
   SpikeGate::Verdict applyGate(const RawFlightSample& s, double dt) {
     const SpikeGate::Verdict verdict =
         gate.check(s, dt, kinematics, cfg.spikeDeviationG, noise.sigma(), noise.ready());
     switch (verdict) {
       case SpikeGate::Verdict::Accept:
       case SpikeGate::Verdict::Hold:
+      case SpikeGate::Verdict::Confirm:
+      case SpikeGate::Verdict::Noise:
         break;
       case SpikeGate::Verdict::DropPrevious:
-        kinematics.removeNewest(gate.dropCount());
-        for (int i = 0; i < gate.dropCount(); ++i) {
-          attitudes.popNewest();
-          reject(&DataQuality::rejectedSpike);
-        }
+        dropHeldSamples(gate.resolved());
         break;
       case SpikeGate::Verdict::Reject:
         reject(&DataQuality::rejectedSpike);
+        runInMission[static_cast<std::size_t>(gate.runSize() - 1)] = countsInMission();
         break;
-      case SpikeGate::Verdict::Jump: {
-        if (s.velocity) {
-          // The position agrees (no teleport): a velocity step, possibly a real manoeuvre
-          // beyond spikeDeviationG. Restart only the acceleration window; G display, high-G
-          // episode and consumers carry on.
-          restartKinematics();
-          ++quality.resetsJump;
-        } else {
-          discontinuity();
-          ++quality.resetsTeleport;
-        }
-        // The rejected run agrees on the new state: start the window from it (its last
-        // sample is s, which the caller adds), so the estimate is valid again at once.
-        const auto& run = gate.run();
-        for (std::size_t i = 0; i + 1 < run.size(); ++i) addToWindow(run[i]);
+      case SpikeGate::Verdict::Jump:
+        restartFromRun(s);
         break;
-      }
     }
+    // Signs of noise above what the estimate says (it lags increases): rejections that scatter
+    // instead of agreeing like a real jump's, or a gate busy with most samples.
+    const bool scattered = verdict == SpikeGate::Verdict::Noise ||
+                           (verdict == SpikeGate::Verdict::Reject && gate.runScatters());
+    if (s.velocity && (scattered || gate.busy())) noiseAboveGate();
     return verdict;
   }
 
-  void addToWindow(const RawFlightSample& s, bool hold = false) {
-    kinematics.add(s.t, s.position, s.velocity, hold);
+  // The newest `count` window samples, held by the gate, were a glitch.
+  void dropHeldSamples(int count) {
+    kinematics.removeNewest(count);
+    for (int i = count - 1; i >= 0; --i) {
+      attitudes.popNewest();
+      recountAsRejected(heldInMission[static_cast<std::size_t>(i)]);
+    }
+  }
+
+  // A run of rejected samples that agree: a real jump.
+  void restartFromRun(const RawFlightSample& s) {
+    if (s.velocity) {
+      // The position agrees (no teleport): a velocity step, possibly a real manoeuvre beyond
+      // spikeDeviationG. Restart only the acceleration window; G display, high-G episode and
+      // consumers carry on.
+      restartKinematics();
+      ++quality.resetsJump;
+    } else {
+      discontinuity();
+      ++quality.resetsTeleport;
+    }
+    // The rejected run agrees on the new state: start the window from it (its last sample is
+    // s, which the caller adds), so the estimate is valid again at once.
+    const auto& run = gate.run();
+    for (std::size_t i = 0; i + 1 < run.size(); ++i) {
+      addToWindow(run[i], SpikeGate::Verdict::Accept);
+      recountAsAccepted(runInMission[i]);
+    }
+  }
+
+  // The gate found the input noisier than the noise estimate says (scattered rejections):
+  // take the longest adaptive window now instead of when the estimate has caught up (~0.1 s);
+  // the slow release brings it back if the noise does not last.
+  void noiseAboveGate() {
+    if (idealWindowS > 0.0) idealWindowS = std::max(idealWindowS, cfg.adaptiveMaxWindowS);
+  }
+
+  void addToWindow(const RawFlightSample& s, SpikeGate::Verdict verdict) {
+    if (verdict == SpikeGate::Verdict::Confirm) kinematics.commitHeld(gate.resolved());
+    if (verdict == SpikeGate::Verdict::Hold || verdict == SpikeGate::Verdict::Confirm)
+      kinematics.addHeld(s.t, *s.velocity);
+    else
+      kinematics.add(s.t, s.position, s.velocity);
     attitudes.push(s.t, s.attitude);
     attitudes.trimBefore(kinematics.oldestTime());
   }
+
+  // ---- per-sample processing ------------------------------------------------------
 
   // Position jump inconsistent with the motion (respawn, checkpoint). Position-only input
   // is measured against the same fit prediction as the spike gate.
@@ -331,7 +417,7 @@ struct TelemetryPipeline::Impl {
     lastPos = s.position;
     lastVel = s.velocity;
     selectWindows(stepDt);
-    addToWindow(s, verdict == SpikeGate::Verdict::Hold);
+    addToWindow(s, verdict);
 
     // Start from the previous metrics so fields that can't be computed yet keep their
     // last value; `valid` tells consumers whether to trust them.
@@ -367,13 +453,12 @@ struct TelemetryPipeline::Impl {
     m.inHighG = highG.active();
     m.highGDurationS = highG.durationS();
 
-    ++quality.accepted;
+    countAccepted(verdict);
     if (extremeG) ++quality.extremeG;
     if (phase == MissionPhase::Active) {
-      mission.countAccepted();
       if (extremeG) mission.countExtremeG();
       mission.addTime(countTime ? stepDt : 0.0);
-      if (m.valid) mission.add(m, stepDt, highGStep.entered);
+      if (m.valid) missionFeed.add(mission, m, stepDt, highGStep.entered, filter.onsetWindowS);
     }
     if (m.valid) recordRecent(m.g, stepDt);
     current = m;
@@ -413,6 +498,7 @@ struct TelemetryPipeline::Impl {
     resetEstimators();
     highG.reset();
     mission.clearStats();
+    missionFeed.clear();
     recent.clear();
     recentAccumS = 1.0 / recent.sampleHz;
     quality = {};
@@ -442,6 +528,8 @@ void TelemetryPipeline::setConfig(const PipelineConfig& config) {
 const PipelineConfig& TelemetryPipeline::config() const { return impl_->cfg; }
 
 void TelemetryPipeline::push(const RawFlightSample& sample) { impl_->push(sample); }
+
+void TelemetryPipeline::setMissionLabel(std::string label) { impl_->missionLabel = std::move(label); }
 
 void TelemetryPipeline::reset() { impl_->reset(); }
 

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 
 namespace ft {
 namespace {
@@ -78,6 +79,19 @@ std::string formatClock(double seconds) {
   const long long total = static_cast<long long>(std::floor(seconds));
   char buf[32];
   std::snprintf(buf, sizeof buf, "%02lld:%02lld", total / 60, total % 60);
+  return buf;
+}
+
+std::string formatLocalDateTime(std::int64_t unixS) {
+  const std::time_t t = static_cast<std::time_t>(unixS);
+  std::tm local{};
+#if defined(_WIN32)
+  const bool ok = localtime_s(&local, &t) == 0;
+#else
+  const bool ok = localtime_r(&t, &local) != nullptr;
+#endif
+  char buf[32];
+  if (!ok || std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", &local) == 0) return "----------";
   return buf;
 }
 

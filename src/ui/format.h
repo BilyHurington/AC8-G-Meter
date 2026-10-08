@@ -1,5 +1,6 @@
 #pragma once
 // Text formatting for the overlay and summary (pure, no ImGui), unit-testable.
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,7 @@ std::vector<std::string> formatHudLines(const OverlaySettings& overlay,
 
 std::string formatClock(double seconds);   // "mm:ss" (minutes may exceed 99), "--:--" if invalid
 std::string formatSpeedKmh(double metresPerSecond);  // "850 km/h"
+std::string formatLocalDateTime(std::int64_t unixS);  // "2026-10-08 14:03" in the local time zone
 std::string gBinLabel(int bin);            // "< -1", "-1..0", ..., ">= 9" (matches kGBinEdges)
 
 }  // namespace ft

@@ -182,18 +182,70 @@ TEST_CASE("KinematicsEstimator: warm-up span rule, look-back helpers") {
   CHECK(k.hasAcceleration());
   checkVec(k.acceleration(), a, 1e-6);
 
-  // A suspect sample (hold) is used for predictions but left out of the estimates; removing
-  // it restores the trend.
-  const Vec3 glitch = v(5 / 60.0) + Vec3{0.0, 0.0, 3.0};
-  k.add(5 / 60.0, {}, glitch, /*holdNewest=*/true);
+  // Suspect samples (addHeld) are used for predictions, but the estimates stay those from
+  // before them and the window is not trimmed; removing them restores the trend.
+  const int size = k.size();
+  const double accelT = k.accelerationTime();
+  k.addHeld(5 / 60.0, v(5 / 60.0) + Vec3{0.0, 0.0, 3.0});
+  k.addHeld(6 / 60.0, v(6 / 60.0) + Vec3{0.0, 0.0, 3.0});
+  CHECK(k.size() == size + 2);
   checkVec(k.acceleration(), a, 1e-6);
   checkVec(k.velocity(), v(4 / 60.0), 1e-9);
-  CHECK(length(*k.predictVelocity(6 / 60.0) - v(6 / 60.0)) > 1.0);
-  checkVec(*k.predictVelocityWithoutNewest(6 / 60.0), v(6 / 60.0), 1e-6);
-  k.removeNewest();
-  CHECK(k.size() == 5);
-  checkVec(*k.predictVelocity(6 / 60.0), v(6 / 60.0), 1e-6);
+  CHECK(k.accelerationTime() == accelT);
+  CHECK(length(*k.predictVelocity(7 / 60.0) - v(7 / 60.0)) > 1.0);
+  checkVec(*k.predictVelocityWithoutNewest(7 / 60.0, 2), v(7 / 60.0), 1e-6);
+  k.removeNewest(2);
+  CHECK(k.size() == size);
+  checkVec(*k.predictVelocity(7 / 60.0), v(7 / 60.0), 1e-6);
   CHECK(k.lastTime() == Approx(4 / 60.0));
+  // A confirmed held sample: the next add() estimates from everything.
+  k.addHeld(5 / 60.0, v(5 / 60.0));
+  k.add(6 / 60.0, {}, v(6 / 60.0));
+  checkVec(k.velocity(), v(6 / 60.0), 1e-9);
+  checkVec(k.acceleration(), a, 1e-6);
+}
+
+TEST_CASE("TimedWindow: slope and mean time of a sub-range") {
+  TimedWindow<double> w;
+  // v = 1 + 2 t for t < 0.3, then 10 t: the sub-range from index 3 sees only the second part.
+  for (int i = 0; i < 6; ++i) {
+    const double t = 0.1 * i;
+    w.push(t, t < 0.3 ? 1.0 + 2.0 * t : 10.0 * t);
+  }
+  CHECK(w.slope(3) == Approx(2.0));
+  CHECK(w.slope(3, 3) == Approx(10.0));
+  CHECK(w.slope(-1, 3) == Approx(10.0));  // to the newest
+  CHECK(w.meanTime(3, 3) == Approx(0.4));
+  CHECK(w.slope(1, 5) == 0.0);
+}
+
+TEST_CASE("KinematicsEstimator: kept history, held samples committed as of the oldest") {
+  const Vec3 a{0.0, 0.0, 20.0};
+  auto v = [&](double t) { return Vec3{200.0, 0.0, 0.0} + a * t; };
+  KinematicsEstimator k;
+  // 30 ms window, 80 ms of history: a longer window applies at once.
+  k.setWindows(0.03, 0.15, 0.08);
+  for (int i = 0; i <= 12; ++i) k.add(i / 100.0, {}, v(i / 100.0));
+  CHECK(k.size() == 9);  // 0.04 - 0.12 s
+  CHECK(k.accelerationTime() == Approx(0.105));
+  k.setWindows(0.08, 0.15, 0.08);
+  k.add(0.13, {}, v(0.13));
+  CHECK(k.accelerationTime() == Approx(0.09));
+  checkVec(k.acceleration(), a, 1e-6);
+
+  // A velocity step held for two samples, then confirmed: the estimate is that of the window
+  // ending at the first held sample (the step in it), the second stays out until the next add.
+  k.setWindows(0.025, 0.15, 0.08);
+  const Vec3 step{0.0, 0.0, 2.0};
+  k.addHeld(0.14, v(0.14) + step);
+  k.addHeld(0.15, v(0.15) + step);
+  checkVec(k.acceleration(), a, 1e-6);  // unchanged while held
+  k.commitHeld(2);
+  CHECK(k.accelerationTime() == Approx(0.13));  // 0.12 - 0.14
+  CHECK(k.acceleration().z > a.z + 50.0);         // the step is in the window
+  checkVec(k.velocity(), v(0.14) + step, 1e-9);
+  k.add(0.16, {}, v(0.16) + step);
+  CHECK(k.accelerationTime() == Approx(0.15));  // 0.14 - 0.16
 }
 
 TEST_CASE("KinematicsEstimator: velocity slope and position quadratic fit") {

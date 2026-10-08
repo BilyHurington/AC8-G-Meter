@@ -4,6 +4,7 @@
 // debug panel.
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,17 +16,20 @@
 #include "sources/csv_recorder.h"
 #include "sources/replay_source.h"
 #include "sources/simulated_source.h"
+#include "storage/mission_archive.h"
 #include "ui/telemetry_ui.h"
 
 namespace ft {
 
 struct ProtoConfig {
   std::filesystem::path settingsPath;
+  std::filesystem::path missionsDir;             // mission history (MissionArchive)
   std::filesystem::path assetsDir;               // contains fonts/
   std::vector<std::filesystem::path> replayDirs;  // searched for *.csv
   std::filesystem::path recordDir;               // where "Record to CSV" writes
   // Scripted options (command line), mainly for automated screenshots.
   bool openMenu = false;
+  bool openHistory = false;
   bool editMode = false;
   bool debugPanel = true;
   std::optional<Scenario> scenario;
@@ -61,8 +65,11 @@ class ProtoApp {
   void rescanReplays();
   ITelemetrySource& source();
 
+  std::string missionLabel() const;  // "Simulator: <scenario>" / "Replay: <file>"
+
   ProtoConfig config_;
   SettingsStore store_;
+  MissionArchive archive_;  // declared before ui_, which keeps a pointer to it
   TelemetryUi ui_;
   TelemetryPipeline pipeline_;
   LatestValue<MetricsSnapshot> latest_;  // pipeline -> UI hand-off (game -> render thread in-game)
@@ -76,6 +83,7 @@ class ProtoApp {
   SimulatedSource sim_;
   ReplaySource replay_;
   std::vector<RawFlightSample> samples_;
+  std::string appliedLabel_;
   double simTimeS_ = 0.0;  // game time of the latest sample (for --end-mission-at)
   bool endMissionDone_ = false;
 

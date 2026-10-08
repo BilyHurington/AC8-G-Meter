@@ -13,8 +13,13 @@
 namespace ft {
 
 ProtoApp::ProtoApp(ProtoConfig config)
-    : config_(std::move(config)), store_(config_.settingsPath), ui_(store_) {
+    : config_(std::move(config)),
+      store_(config_.settingsPath),
+      archive_(config_.missionsDir),
+      ui_(store_) {
   store_.load();
+  archive_.setMaxSaved(store_.settings().history.maxSavedMissions);
+  ui_.setMissionArchive(&archive_);
   if (!store_.lastError().empty())
     std::fprintf(stderr, "settings: %s (using defaults)\n", store_.lastError().c_str());
   pipeline_.setConfig(store_.settings().toPipelineConfig(baseConfig_));
@@ -28,6 +33,7 @@ ProtoApp::ProtoApp(ProtoConfig config)
   sim_.setOptions(simOptions_);
   sim_.restart();
   ui_.setMenuOpen(config_.openMenu);
+  ui_.showHistory(config_.openHistory);
   ui_.setEditMode(config_.editMode);
   debugOpen_ = config_.debugPanel;
   rescanReplays();
@@ -56,6 +62,12 @@ void ProtoApp::update(double realDtS) {
   const bool isSim = sourceKind_ == SourceKind::Simulator;
   if (isSim && sim_.options().scenario == Scenario::Manual) sim_.setManualInput(manual_);
   source().poll(realDtS, samples_);
+
+  // The mission label is game-side knowledge (the mod will use the map name).
+  if (std::string label = missionLabel(); label != appliedLabel_) {
+    pipeline_.setMissionLabel(label);
+    appliedLabel_ = std::move(label);
+  }
 
   // Apply settings published by the UI since the last update (UI -> game-thread hand-off).
   if (PipelineConfig config; pendingConfig_.readIfNewer(appliedConfigVersion_, config))
@@ -143,6 +155,13 @@ void ProtoApp::draw(float screenW, float screenH, double now) {
 void ProtoApp::shutdown() {
   store_.flush();
   recorder_.close();
+  archive_.flush();  // a mission that just ended is written before the process exits
+}
+
+std::string ProtoApp::missionLabel() const {
+  if (sourceKind_ == SourceKind::Simulator) return std::string("Simulator: ") + scenarioName(sim_.options().scenario);
+  return "Replay: " + (replay_.path().empty() ? std::string("(in-memory log)")
+                                               : pathToUtf8(std::filesystem::path(replay_.path()).filename()));
 }
 
 std::optional<std::pair<int, int>> ProtoApp::takeResizeRequest() {

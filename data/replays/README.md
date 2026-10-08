@@ -11,8 +11,8 @@ mission report. Each `*.csv` here is registered as a ctest (`replay_cli <log> --
 | `sustained_turn.csv` | turn, 40 s | ~82° bank, ~7 G held 8 s, alternating direction |
 | `pull_push.csv` | pullpush, 30 s | +5 G pull, unload, −2 G push |
 | `dogfight_mix.csv` | dogfight, 90 s | seeded random manoeuvres, about −3 to +9 G |
-| `dirty_dogfight.csv` | dogfight, 60 s | noise, jitter, drops, duplicates, 1 spike, 1 hitch, 1 teleport; looser `# check:` limits |
-| `position_only_turn.csv` | turn, 30 s | no velocity columns (estimator differentiates position over the fixed, longer `accelWindowPositionOnlyS`); looser `# check:` limits |
+| `dirty_dogfight.csv` | dogfight, 60 s | noise, jitter, drops, duplicates, 1 spike, 1 hitch, 1 teleport |
+| `position_only_turn.csv` | turn, 30 s | no velocity columns (estimator differentiates position over the fixed, longer `accelWindowPositionOnlyS`) |
 
 Regenerate (from the repo root, after building `replay_cli`):
 
@@ -35,20 +35,25 @@ $R --generate turn     --duration 30 --out data/replays/position_only_turn.csv -
   i.e. the estimation quality with the delay removed. The delay itself is reported as `lag`.
 
 The check passes when, for G, the zero-lag RMS is at most 0.29 G and the aligned RMS at most
-0.15 G; for AoA, the aligned RMS is at most 0.5°; and the delay is at most 52 ms. These defaults
-are for clean velocity logs. A log can override any of them with a comment line such as
-`# check: g_rms0<=0.8 g_rms<=0.35 aoa_rms<=1.5 latency_ms<=180` (`g_rms` is the aligned limit).
+0.15 G; for AoA, the aligned RMS is at most 0.5°; and the delay is at most 52 ms. A log can
+override any of them with a comment line such as
+`# check: g_rms0<=0.8 g_rms<=0.35 aoa_rms<=1.5 latency_ms<=180` (`g_rms` is the aligned limit);
+the logs here set limits ~30% above their measured values (the defaults are looser).
 
 The default config uses adaptive filtering: the velocity least-squares window, EMA τ and onset
 window follow the measured sample rate and velocity noise (`PipelineConfig::adaptiveFiltering`),
-never longer than the fixed ones, and a 3-sample median removes single bad output frames (one
-sample of delay). Measured (limits are ~30% above):
+never longer than the fixed ones, and there is no median (the spike gate's look-back keeps
+glitches of up to 3 samples off the display without erasing real one-frame G impulses).
+Measured:
 
-| Log | Filter (end of log) | Delay | Zero-lag G RMS |
-|---|---|---|---|
-| clean velocity logs (60 Hz) | adaptive, window 42 ms, τ 17 ms | 40 ms | 0.00–0.22 G (dogfight_mix worst) |
-| `dirty_dogfight.csv` (0.05 m/s noise) | adaptive, window 80 ms, τ ~48 ms | 90 ms | 0.45 G |
-| `position_only_turn.csv` | fixed, 0.15 s position window, τ 50 ms | 125 ms | 0.33 G |
+| Log | Filter (end of log) | Delay | Zero-lag G RMS | `# check:` |
+|---|---|---|---|---|
+| `level_cruise.csv` | adaptive, window 42 ms, τ 17 ms | 0 ms | 0.00 G | defaults |
+| `sustained_turn.csv` | adaptive, window 44 ms, τ 17 ms | 25 ms | 0.063 G | `g_rms0<=0.08 latency_ms<=33` |
+| `pull_push.csv` | adaptive, window 43 ms, τ 17 ms | 25 ms | 0.085 G | `g_rms0<=0.11 latency_ms<=33` |
+| `dogfight_mix.csv` | adaptive, window 44 ms, τ 18 ms | 25 ms | 0.132 G | `g_rms0<=0.17 latency_ms<=33` |
+| `dirty_dogfight.csv` (0.05 m/s noise) | adaptive, window 80 ms, τ ~49 ms | 70 ms | 0.36 G (aligned 0.061) | `g_rms<=0.08 g_rms0<=0.47 aoa_rms<=0.5 latency_ms<=91` |
+| `position_only_turn.csv` | fixed, 0.15 s position window, τ 50 ms | 110 ms | 0.29 G | `g_rms0<=0.38 latency_ms<=143` |
 
 With the old fixed defaults (0.08 s window, median 5, τ 0.05 s) the delay was ~105 ms on every
 velocity log and the zero-lag RMS up to 0.54 G. `build/apps/latency_bench/latency_bench`

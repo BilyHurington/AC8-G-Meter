@@ -15,8 +15,7 @@ void applyTelemetryStyle(ImGuiStyle& style) {
   style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
 
   // Neutral dark panels with the HUD green (#93F6A8) as the accent colour.
-  const ImVec4 accent(0.576f, 0.965f, 0.659f, 1.0f);
-  auto withAlpha = [](ImVec4 c, float a) { return ImVec4(c.x, c.y, c.z, a); };
+  const ImVec4 accent = kHudAccent;
   ImVec4* c = style.Colors;
   c[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.08f, 0.07f, 0.94f);
   c[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.09f, 0.08f, 0.97f);

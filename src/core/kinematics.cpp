@@ -17,8 +17,7 @@ void KinematicsEstimator::reset() {
   residualSigma_ = 0.0;
 }
 
-void KinematicsEstimator::add(double t, const Vec3& position, const std::optional<Vec3>& velocity,
-                              bool holdNewest) {
+void KinematicsEstimator::add(double t, const Vec3& position, const std::optional<Vec3>& velocity) {
   const Mode mode = velocity ? Mode::Velocity : Mode::Position;
   if (mode != mode_) {
     reset();
@@ -27,32 +26,51 @@ void KinematicsEstimator::add(double t, const Vec3& position, const std::optiona
   lastT_ = t;
   lastP_ = position;
   window_.push(t, velocity ? *velocity : position);
-  window_.trim(windowS(), kMinPoints, kMinSpan * windowS());
   if (mode_ == Mode::Velocity) {
-    estimateFromVelocity(holdNewest);
+    window_.trim(velocityHistoryS_, kMinPoints, kMinSpan * velocityWindowS_);
+    estimateFromVelocity(window_.size() - 1);
   } else {
+    window_.trim(positionWindowS_, kMinPoints, kMinSpan * positionWindowS_);
     estimateFromPosition();
   }
+}
+
+void KinematicsEstimator::addHeld(double t, const Vec3& velocity) {
+  if (mode_ != Mode::Velocity) return;
+  lastT_ = t;
+  window_.push(t, velocity);
+}
+
+void KinematicsEstimator::commitHeld(int held) {
+  if (mode_ != Mode::Velocity || held < 1 || held > window_.size()) return;
+  estimateFromVelocity(window_.size() - held);
 }
 
 void KinematicsEstimator::removeNewest(int count) {
   if (mode_ != Mode::Velocity) return;
   for (int i = 0; i < count && window_.size() > 1; ++i) window_.popNewest();
   lastT_ = window_.time(window_.size() - 1);
-  estimateFromVelocity(false);
+  estimateFromVelocity(window_.size() - 1);
 }
 
-void KinematicsEstimator::estimateFromVelocity(bool holdNewest) {
+int KinematicsEstimator::windowStart(int last) const {
+  const double newest = window_.time(last);
+  int first = 0;
+  while (last - first + 1 > kMinPoints && newest - window_.time(first) > velocityWindowS_ &&
+         newest - window_.time(first + 1) >= kMinSpan * velocityWindowS_)
+    ++first;
+  return first;
+}
+
+void KinematicsEstimator::estimateFromVelocity(int last) {
+  const int first = windowStart(last);
+  const int n = last - first + 1;
   hasVelocity_ = true;
-  const int n = window_.size();
-  warmedUp_ = warmedUp_ || window_.time(n - 1) - window_.time(0) >= kMinSpan * velocityWindowS_;
+  warmedUp_ = warmedUp_ || window_.time(last) - window_.time(first) >= kMinSpan * velocityWindowS_;
   hasAccel_ = n >= kMinPoints && warmedUp_;
-  // A suspect newest sample is left out of the estimates (a 2-point slope for this one frame
-  // if need be: there are suspects only when the noise is far below them).
-  const int used = holdNewest && n > 2 ? n - 1 : n;
-  velocity_ = window_.value(used - 1);
-  accel_ = window_.slope(used);  // 0 with a single sample
-  accelT_ = window_.meanTime(used);
+  velocity_ = window_.value(last);
+  accel_ = window_.slope(n, first);  // 0 with a single sample
+  accelT_ = window_.meanTime(n, first);
 }
 
 void KinematicsEstimator::estimateFromPosition() {
@@ -122,16 +140,17 @@ void KinematicsEstimator::estimateFromPosition() {
 
 std::optional<Vec3> KinematicsEstimator::predictVelocity(double t) const {
   if (mode_ != Mode::Velocity || window_.size() < 1) return std::nullopt;
-  return extrapolateVelocity(window_.size(), t);
+  return extrapolateVelocity(window_.size() - 1, t);
 }
 
 std::optional<Vec3> KinematicsEstimator::predictVelocityWithoutNewest(double t, int count) const {
   if (mode_ != Mode::Velocity || window_.size() <= count) return std::nullopt;
-  return extrapolateVelocity(window_.size() - count, t);
+  return extrapolateVelocity(window_.size() - 1 - count, t);
 }
 
-Vec3 KinematicsEstimator::extrapolateVelocity(int n, double t) const {
-  return window_.value(n - 1) + window_.slope(n) * (t - window_.time(n - 1));
+Vec3 KinematicsEstimator::extrapolateVelocity(int last, double t) const {
+  const int first = windowStart(last);
+  return window_.value(last) + window_.slope(last - first + 1, first) * (t - window_.time(last));
 }
 
 std::optional<Vec3> KinematicsEstimator::predictPosition(double t) const {

@@ -2,8 +2,10 @@
 // Output data model of the core layer: what the UI (and future consumers such as the
 // pilot-physiology model) read. Plain value types, cheap to copy across threads.
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "core/math.h"
@@ -60,17 +62,49 @@ struct MissionStats {
   std::uint64_t extremeGSamples = 0;  // accepted, |load factor| > PipelineConfig::extremeGThreshold
 };
 
+// One bucket of a MissionTrace (1 / hz of mission time).
+struct TracePoint {
+  float gMean = 1.0f;          // time-weighted mean of `g`
+  float gMin = 1.0f, gMax = 1.0f;  // extremes: a one-frame peak survives the downsampling
+  float onset = 0.0f;          // onset rate with the largest magnitude in the bucket, G/s
+  float aoaDeg = 0.0f;         // largest valid AoA, NaN when no sample had a valid AoA
+  float speed = 0.0f;          // m/s, last sample of the bucket
+  float altitude = 0.0f;       // m, last sample of the bucket
+  bool highG = false;          // some sample was inside a sustained high-G episode
+};
+
+// Fixed-rate record of a mission's valid metrics for the post-mission chart and the archive.
+// Bucket i covers mission time [startS + i / hz, startS + (i + 1) / hz). Struct of arrays:
+// every column has size() entries.
+struct MissionTrace {
+  double hz = 20.0;
+  // Mission time of bucket 0. 0 unless the G mode changed mid-mission, which restarts the
+  // trace (and the other G statistics) at that point.
+  double startS = 0.0;
+  std::vector<float> gMean, gMin, gMax, onset, aoaDeg, speed, altitude;
+  std::vector<std::uint8_t> highG;  // 0 / 1
+
+  std::size_t size() const { return gMean.size(); }
+  bool empty() const { return gMean.empty(); }
+  double timeAt(std::size_t i) const { return startS + static_cast<double>(i) / hz; }
+  double endS() const { return timeAt(size()); }
+  void push(const TracePoint& p);
+  TracePoint at(std::size_t i) const;
+  void clear();
+};
+
 // Immutable record of a finished mission, published once per mission.
 struct MissionReport {
   std::uint32_t id = 0;            // 1, 2, 3, ... per pipeline lifetime
   bool aborted = false;            // left Active for None without passing through Ended
   MissionStats stats;
-  double timelineHz = 10.0;
-  std::vector<float> gTimeline;    // `g` resampled at timelineHz across the mission
-  // Mission time of gTimeline[0]. 0 unless the G mode changed mid-mission, which restarts
-  // the timeline (and the other G statistics) at that point.
-  double timelineStartS = 0.0;
+  MissionTrace trace;
+  // Configuration in use when the mission ended (what `g` and the high-G figures mean).
+  GMode gMode = GMode::Nz;
+  double highGEnter = 6.0;
+  double highGExit = 5.5;
   double extremeGThreshold = 15.0;  // the threshold stats.extremeGSamples was counted with
+  std::string label;                // host-provided name (map, scenario, replay file); may be empty
 };
 
 // Fixed-size ring of recent `g` values at a fixed rate (sparklines, future physiology).
@@ -91,9 +125,10 @@ struct DataQuality {
   std::uint64_t accepted = 0;
   std::uint64_t rejectedNonFinite = 0;   // NaN/Inf or degenerate attitude
   std::uint64_t rejectedTime = 0;        // dt <= 0 (duplicate / out-of-order timestamps)
-  // Inconsistent with the recent motion (spike gate). Includes samples removed from the
-  // window after the fact by the gate's look-back check; their metrics had already been
-  // published, so they are counted in `accepted` as well.
+  // Inconsistent with the recent motion (spike gate), including held samples the gate's
+  // look-back removed after the fact (moved here from `accepted`). Rejected samples a velocity
+  // jump then restarts from are moved to `accepted`. accepted + rejected* = samples pushed
+  // outside pauses.
   std::uint64_t rejectedSpike = 0;
   // Informational, not a rejection: accepted samples whose |load factor| exceeded
   // PipelineConfig::extremeGThreshold. There is no G cap; these are reported as measured.

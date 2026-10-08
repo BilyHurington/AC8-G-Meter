@@ -1,9 +1,10 @@
 // replay_cli: offline regression tool for the telemetry pipeline.
 //
-//   replay_cli <log.csv> [--check] [--json] [--gmode nz|total]
+//   replay_cli <log.csv> [--check] [--json] [--gmode nz|total] [--save-report <dir>]
 //     Pushes every row of a flight log through ft::TelemetryPipeline (default config),
 //     prints the mission statistics and, if the log carries ground truth, the estimator
-//     error. --check exits non-zero when the error exceeds the thresholds.
+//     error. --check exits non-zero when the error exceeds the thresholds. --save-report
+//     writes the last mission to a mission archive directory (as the overlay's history does).
 //
 //   replay_cli --generate <level|turn|pullpush|dogfight> --duration <s> --out <file>
 //              [--seed N] [--dirty] [--no-velocity] [--fps N]
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -19,6 +21,7 @@
 #include <vector>
 
 #include "core/pipeline.h"
+#include "storage/mission_archive.h"
 #include "sources/csv_recorder.h"
 #include "sources/replay_source.h"
 #include "sources/simulated_source.h"
@@ -33,13 +36,13 @@ using namespace ft;
 constexpr double kDefaultGRmsLimit = 0.15;    // G, after removing the estimator delay
 // G error as displayed (no delay compensation): what the pilot actually sees, so it also
 // catches latency regressions. ~30% above the worst clean default-config log (dogfight_mix
-// 0.22 G with adaptive filtering; the error is dominated by the ~40 ms delay in fast
+// 0.13 G with adaptive filtering; the error is dominated by the ~25 ms delay in fast
 // manoeuvres).
-constexpr double kDefaultGRms0Limit = 0.29;   // G
+constexpr double kDefaultGRms0Limit = 0.17;   // G
 constexpr double kDefaultAoaRmsLimit = 0.5;   // deg
-// Estimator delay beyond this fails the check (clean 60 Hz logs measure 40 ms: a 2.5-sample
-// window, its EMA and one sample of median).
-constexpr double kMaxLatencyS = 0.052;
+// Estimator delay beyond this fails the check (clean 60 Hz logs measure 25 ms: a 2.5-sample
+// window and its EMA).
+constexpr double kMaxLatencyS = 0.033;
 // Estimators restart after a gap / teleport / pause; their warm-up is not "error".
 constexpr double kSettleAfterResetS = 0.5;
 constexpr double kMaxLagSearchS = 0.3;
@@ -48,7 +51,7 @@ constexpr double kLagStepS = 0.005;
 int usage() {
   std::fprintf(stderr,
                "usage:\n"
-               "  replay_cli <log.csv> [--check] [--json] [--gmode nz|total]\n"
+               "  replay_cli <log.csv> [--check] [--json] [--gmode nz|total] [--save-report <dir>]\n"
                "  replay_cli --generate <level|turn|pullpush|dogfight> --duration <s> --out <file>\n"
                "             [--seed N] [--dirty] [--no-velocity] [--fps N]\n");
   return 2;
@@ -232,10 +235,11 @@ struct ReplayResult {
   ErrorStats g, aoa;
 };
 
-ReplayResult replay(const std::vector<CsvRow>& rows, GMode gMode) {
+ReplayResult replay(const std::vector<CsvRow>& rows, GMode gMode, const std::string& label) {
   PipelineConfig cfg;
   cfg.gMode = gMode;
   TelemetryPipeline pipeline(cfg);
+  pipeline.setMissionLabel(label);
 
   ReplayResult r;
   r.rows = rows.size();
@@ -428,7 +432,7 @@ bool runCheck(const ReplayResult& r, const CheckLimits& limits, bool quiet) {
 
 int main(int argc, char** argv) {
   std::vector<std::string> args(argv + 1, argv + argc);
-  std::string logPath, scenario, outPath, cmdLine = "replay_cli";
+  std::string logPath, scenario, outPath, saveDir, cmdLine = "replay_cli";
   bool check = false, json = false, dirty = false, noVelocity = false, gen = false;
   double duration = 0.0, fps = 60.0, seed = 1234.0;
   GMode gMode = GMode::Nz;
@@ -452,6 +456,7 @@ int main(int argc, char** argv) {
       gen = true;
       scenario = args[++i];
     } else if (a == "--out" && i + 1 < args.size()) outPath = args[++i];
+    else if (a == "--save-report" && i + 1 < args.size()) saveDir = args[++i];
     else if (a == "--duration") { if (!value(duration)) return usage(); }
     else if (a == "--fps") { if (!value(fps) || fps < 1.0 || fps > 1000.0) return usage(); }
     else if (a == "--seed") { if (!value(seed) || seed < 0.0 || seed > 4294967295.0) return usage(); }
@@ -472,7 +477,24 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "error: %s\n", err.c_str());
     return 2;
   }
-  const ReplayResult result = replay(rows, gMode);
+  const std::string fileName = std::filesystem::path(logPath).filename().string();
+  const ReplayResult result = replay(rows, gMode, "Replay: " + fileName);
+  if (!saveDir.empty()) {
+    if (!result.snapshot.lastReport) {
+      std::fprintf(stderr, "error: --save-report: the log produced no mission report\n");
+      return 2;
+    }
+    MissionArchive archive(saveDir, 0);  // never deletes older reports
+    archive.saveAsync(result.snapshot.lastReport);
+    archive.flush();
+    const SaveStatus st = archive.lastSave();
+    if (st.state != SaveStatus::State::Saved) {
+      std::fprintf(stderr, "error: --save-report: %s\n", st.error.c_str());
+      return 2;
+    }
+    // stderr, so --json output on stdout stays machine-readable.
+    std::fprintf(stderr, "saved    %s\n", st.path.string().c_str());
+  }
   const CheckLimits limits = readCheckDirectives(logPath);
   if (json) {
     const bool pass = !check || runCheck(result, limits, true);

@@ -102,26 +102,27 @@ class TimedWindow {
   double time(int i) const { return times_[index(i)]; }
   const T& value(int i) const { return values_[index(i)]; }
 
-  // Mean time of the oldest n samples (default: all).
-  double meanTime(int n = -1) const {
-    n = clampCount(n);
+  // Mean time of the n samples from index `first` on (default: all).
+  double meanTime(int n = -1, int first = 0) const {
+    n = clampCount(n, first);
     double sum = 0.0;
-    for (int i = 0; i < n; ++i) sum += time(i);
+    for (int i = first; i < first + n; ++i) sum += time(i);
     return n > 0 ? sum / n : 0.0;
   }
 
-  // Least-squares dv/dt over the oldest n samples (default: all). Times are centred on their
-  // mean, so uneven spacing is handled exactly and large absolute timestamps lose no precision.
-  T slope(int n = -1) const {
-    n = clampCount(n);
+  // Least-squares dv/dt over the n samples from index `first` on (default: all). Times are
+  // centred on their mean, so uneven spacing is handled exactly and large absolute timestamps
+  // lose no precision.
+  T slope(int n = -1, int first = 0) const {
+    n = clampCount(n, first);
     if (n < 2) return T{};
-    const double tMean = meanTime(n);
+    const double tMean = meanTime(n, first);
     T vMean{};
-    for (int i = 0; i < n; ++i) vMean = vMean + value(i);
+    for (int i = first; i < first + n; ++i) vMean = vMean + value(i);
     vMean = vMean * (1.0 / n);
     double stt = 0.0;
     T stv{};
-    for (int i = 0; i < n; ++i) {
+    for (int i = first; i < first + n; ++i) {
       const double dt = time(i) - tMean;
       stt += dt * dt;
       stv = stv + (value(i) - vMean) * dt;
@@ -131,7 +132,10 @@ class TimedWindow {
 
  private:
   int index(int i) const { return (head_ - count_ + i + Capacity) % Capacity; }
-  int clampCount(int n) const { return n < 0 || n > count_ ? count_ : n; }
+  int clampCount(int n, int first) const {
+    const int available = std::max(count_ - first, 0);
+    return n < 0 || n > available ? available : n;
+  }
 
   std::array<double, Capacity> times_{};
   std::array<T, Capacity> values_{};

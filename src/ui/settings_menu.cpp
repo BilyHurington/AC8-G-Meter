@@ -5,13 +5,14 @@
 #include <imgui.h>
 
 #include "ui/hotkey_input.h"
+#include "ui/style.h"
 
 namespace ft {
 namespace {
 
-constexpr ImVec4 kAccent{0.576f, 0.965f, 0.659f, 1.0f};  // #93F6A8, same as the HUD text
-constexpr ImVec4 kWarn{1.0f, 0.62f, 0.35f, 1.0f};
-constexpr ImVec4 kError{1.0f, 0.40f, 0.40f, 1.0f};
+constexpr ImVec4 kAccent = kHudAccent;
+constexpr ImVec4 kWarn = kHudWarn;
+constexpr ImVec4 kError = kHudError;
 
 void sectionHeader(const char* title) {
   ImGui::Spacing();
@@ -33,8 +34,8 @@ void helpMarker(const char* text) {
 
 }  // namespace
 
-SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& editMode,
-                                      bool hasLastReport, const FilterState& filter, double now) {
+SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& editMode, bool hasLastReport,
+                                      bool hasArchive, const FilterState& filter, double now) {
   SettingsMenuResult r;
   if (!open) {
     capture_ = Capture::None;
@@ -59,15 +60,7 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   metricsSection(s, filter, r);
   hotkeySection(s, r);
 
-  sectionHeader("Mission summary");
-  r.changed |= ImGui::Checkbox("Show summary when a mission ends", &s.summary.autoShow);
-  ImGui::BeginDisabled(!hasLastReport);
-  if (ImGui::Button("Show last mission")) r.showLastSummary = true;
-  ImGui::EndDisabled();
-  if (!hasLastReport) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("no mission finished yet");
-  }
+  missionSection(s, hasLastReport, hasArchive, r);
   ImGui::PopItemWidth();
 
   ImGui::Spacing();
@@ -78,7 +71,8 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
 
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
   if (ImGui::BeginPopupModal("Restore defaults?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Reset every overlay, metric, hotkey and summary setting\nto its default value?");
+    ImGui::TextUnformatted("Reset every overlay, metric, hotkey, summary and history\nsetting to its default value?"
+                           "\nSaved missions are kept.");
     ImGui::Spacing();
     if (ImGui::Button("Restore defaults")) {
       store.restoreDefaults(now);
@@ -187,10 +181,44 @@ void SettingsMenu::metricsSection(Settings& s, const FilterState& filter, Settin
                              ImGuiSliderFlags_AlwaysClamp);
   helpMarker("A sustained high-G episode starts at the enter threshold and ends below the exit "
              "threshold (hysteresis avoids flicker around a single value).");
+  pipe |= ImGui::SliderFloat("Ignore G spikes shorter than", &m.minExcursionS, 0.0f, 0.5f,
+                             m.minExcursionS <= 0.0f ? "off" : "%.2f s", ImGuiSliderFlags_AlwaysClamp);
+  helpMarker("Bumps and dips of G shorter than this (collisions, physics jolts) are left out of the "
+             "mission MAX / MIN G, the statistics, the high-G episodes and the saved G curve. The "
+             "live G reading is not affected. MAX / MIN G on the overlay then update up to twice "
+             "this time late. 0 = off.");
   if (pipe) {
     s.clamp();  // keeps exit < enter when enter is lowered
     r.changed = r.pipelineChanged = true;
   }
+}
+
+void SettingsMenu::missionSection(Settings& s, bool hasLastReport, bool hasArchive, SettingsMenuResult& r) {
+  sectionHeader("Mission summary & history");
+  r.changed |= ImGui::Checkbox("Show summary when a mission ends", &s.summary.autoShow);
+  ImGui::BeginDisabled(!hasLastReport);
+  if (ImGui::Button("Show last mission")) r.showLastSummary = true;
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!hasArchive);
+  if (ImGui::Button("Mission history...")) r.showHistory = true;
+  ImGui::EndDisabled();
+  if (!hasLastReport) ImGui::TextDisabled("No mission finished yet.");
+  if (!hasArchive) {
+    ImGui::TextDisabled("Mission history is not available in this host.");
+    return;
+  }
+  r.changed |= ImGui::Checkbox("Save finished missions", &s.history.saveMissions);
+  helpMarker("Every mission with G data is saved to the mission history folder (a small JSON "
+             "summary plus a CSV of the G curve), so its summary and chart can be reopened later.");
+  ImGui::BeginDisabled(!s.history.saveMissions);
+  if (ImGui::SliderInt("Keep missions", &s.history.maxSavedMissions, 0, 1000,
+                       s.history.maxSavedMissions == 0 ? "all" : "last %d", ImGuiSliderFlags_AlwaysClamp)) {
+    s.clamp();
+    r.changed = true;
+  }
+  helpMarker("The oldest saved missions are deleted beyond this number (0 = keep all).");
+  ImGui::EndDisabled();
 }
 
 void SettingsMenu::hotkeyRow(const char* label, Hotkey& hotkey, Capture which, SettingsMenuResult& r) {

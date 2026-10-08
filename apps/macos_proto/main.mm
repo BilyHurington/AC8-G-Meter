@@ -3,7 +3,8 @@
 // Present hook. Based on imgui/examples/example_sdl3_metal.
 //
 // Usage: ft_macos_proto [--settings <file.json>] [--scenario <name>] [--size WxH]
-//                       [--menu] [--edit] [--no-debug] [--end-mission-at <s>]
+//                       [--menu] [--edit] [--history] [--no-debug] [--end-mission-at <s>]
+//                       [--missions <dir>]
 //                       [--screenshot <file.png> [--frames N]]
 #include <cctype>
 #include <cstdio>
@@ -30,6 +31,7 @@ namespace {
 
 struct Args {
   std::string settingsPath;
+  std::string missionsDir;
   std::string screenshotPath;
   int frames = 120;
   int width = 1600, height = 900;
@@ -50,7 +52,9 @@ bool parseArgs(int argc, char** argv, Args& a) {
     if (arg == "--settings" && hasValue) a.settingsPath = argv[++i];
     else if (arg == "--screenshot" && hasValue) a.screenshotPath = argv[++i];
     else if (arg == "--frames" && hasValue) a.frames = std::max(1, std::atoi(argv[++i]));
+    else if (arg == "--missions" && hasValue) a.missionsDir = argv[++i];
     else if (arg == "--menu") a.proto.openMenu = true;
+    else if (arg == "--history") a.proto.openHistory = true;
     else if (arg == "--edit") a.proto.editMode = true;
     else if (arg == "--no-debug") a.proto.debugPanel = false;
     else if (arg == "--end-mission-at" && hasValue) a.proto.endMissionAtS = std::atof(argv[++i]);
@@ -104,8 +108,9 @@ int main(int argc, char** argv) {
   Args args;
   if (!parseArgs(argc, argv, args)) {
     std::fprintf(stderr,
-                 "usage: %s [--settings file.json] [--scenario name] [--size WxH] [--menu] [--edit]\n"
-                 "          [--no-debug] [--end-mission-at seconds] [--screenshot out.png [--frames N]]\n",
+                 "usage: %s [--settings file.json] [--missions dir] [--scenario name] [--size WxH]\n"
+                 "          [--menu] [--edit] [--history] [--no-debug] [--end-mission-at seconds]\n"
+                 "          [--screenshot out.png [--frames N]]\n",
                  argv[0]);
     return 2;
   }
@@ -115,6 +120,10 @@ int main(int argc, char** argv) {
   const fs::path base = SDL_GetBasePath() ? fs::path(SDL_GetBasePath()) : fs::current_path();
   const fs::path src = FT_SOURCE_DIR;
   args.proto.settingsPath = args.settingsPath.empty() ? ft::defaultSettingsPath() : fs::path(args.settingsPath);
+  // Mission history next to the settings file (a custom --settings keeps its missions with it).
+  args.proto.missionsDir = !args.missionsDir.empty() ? fs::path(args.missionsDir)
+                           : args.settingsPath.empty() ? ft::defaultMissionsDir()
+                                                       : args.proto.settingsPath.parent_path() / "missions";
   args.proto.assetsDir = firstExisting({base / "assets", src / "assets"});
   args.proto.replayDirs = {base / "replays", src / "data" / "replays"};
   const char* home = std::getenv("HOME");

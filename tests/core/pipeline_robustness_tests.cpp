@@ -56,7 +56,10 @@ TEST_CASE("a persistent velocity jump restarts the acceleration window only") {
     p.push(s);
   }
   const MetricsSnapshot snap = p.snapshot();
-  CHECK(snap.quality.rejectedSpike == 2);
+  // The two samples rejected before the jump was recognised are used after all: counted as
+  // accepted.
+  CHECK(snap.quality.rejectedSpike == 0);
+  CHECK(snap.quality.accepted == 120);
   CHECK(snap.quality.resetsJump == 1);
   CHECK(snap.quality.resetsTeleport == 0);
   CHECK(c.resets == 0);  // not a discontinuity of the aircraft state: no onReset
