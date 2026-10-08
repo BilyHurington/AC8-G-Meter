@@ -16,6 +16,14 @@ add_library(imgui STATIC
 target_include_directories(imgui SYSTEM PUBLIC ${imgui_src_SOURCE_DIR} ${imgui_src_SOURCE_DIR}/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 set(FT_IMGUI_DIR ${imgui_src_SOURCE_DIR} CACHE INTERNAL "")
+if(WIN32)
+  # Win32 + Direct3D 12 backends: the Windows prototype and the in-game overlay (AC8 is DX12).
+  add_library(imgui_win32_dx12 STATIC
+    ${imgui_src_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+    ${imgui_src_SOURCE_DIR}/backends/imgui_impl_dx12.cpp)
+  target_link_libraries(imgui_win32_dx12 PUBLIC imgui d3d12 dxgi d3dcompiler)
+  target_compile_definitions(imgui_win32_dx12 PRIVATE UNICODE _UNICODE)
+endif()
 
 FetchContent_Declare(nlohmann_json
   URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz)

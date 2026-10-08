@@ -12,6 +12,7 @@ endif()
 
 option(FT_BUILD_TESTS "Build unit tests" ON)
 option(FT_BUILD_MACOS_PROTO "Build the SDL3 + Metal standalone prototype (macOS only)" ${APPLE})
+option(FT_BUILD_WIN_PROTO "Build the Win32 + Direct3D 12 standalone prototype (Windows only)" ${WIN32})
 
 # Sources are UTF-8; without this MSVC reads them in the system code page (e.g. 936).
 if(MSVC)
@@ -52,8 +53,12 @@ target_link_libraries(ft_ui      PUBLIC ft_core ft_config ft_storage imgui)
 
 add_subdirectory(apps/replay_cli)
 add_subdirectory(apps/latency_bench)
+add_subdirectory(apps/proto_common)  # portable, so it is always compiled (and warning-checked)
 if(FT_BUILD_MACOS_PROTO)
   add_subdirectory(apps/macos_proto)
+endif()
+if(FT_BUILD_WIN_PROTO)
+  add_subdirectory(apps/win_proto)
 endif()
 
 if(FT_BUILD_TESTS)

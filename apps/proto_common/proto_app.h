@@ -1,5 +1,6 @@
 #pragma once
-// Everything the prototype does per frame, independent of SDL / Metal (main.mm owns those):
+// Everything the prototype does per frame, independent of the window system and graphics API
+// (the hosts apps/macos_proto and apps/win_proto own those):
 // telemetry source -> pipeline -> LatestValue snapshot -> fake game scene + TelemetryUi +
 // debug panel.
 #include <cstdint>
@@ -51,7 +52,8 @@ class ProtoApp {
   void draw(float screenW, float screenH, double now);
   void shutdown();  // flushes settings, closes the recorder
 
-  // Pending "virtual resolution" window resize from the debug panel (window points).
+  // Pending "virtual resolution" window resize from the debug panel (window size units of the
+  // host: points on macOS, pixels on Windows).
   std::optional<std::pair<int, int>> takeResizeRequest();
 
  private:

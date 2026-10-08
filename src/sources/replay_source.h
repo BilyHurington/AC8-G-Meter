@@ -1,5 +1,6 @@
 #pragma once
 // Plays a CSV flight log back in (scaled) real time.
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -10,11 +11,11 @@ namespace ft {
 
 // Reads a log: '#' comment lines and blank lines are skipped, the first remaining line must
 // be the exact header. Errors name the offending line number.
-bool loadCsvLog(const std::string& path, std::vector<CsvRow>& rows, std::string* error = nullptr);
+bool loadCsvLog(const std::filesystem::path& path, std::vector<CsvRow>& rows, std::string* error = nullptr);
 
 class ReplaySource final : public ITelemetrySource {
  public:
-  bool load(const std::string& path, std::string* error = nullptr);
+  bool load(const std::filesystem::path& path, std::string* error = nullptr);
   void setRows(std::vector<CsvRow> rows);  // e.g. generated in memory
 
   void poll(double realDtS, std::vector<RawFlightSample>& out) override;
@@ -35,11 +36,11 @@ class ReplaySource final : public ITelemetrySource {
   // Most recently emitted row (null before the first poll) for its ground truth. Its
   // sample.t is the original log time, without the loop offset.
   const CsvRow* lastEmitted() const;
-  const std::string& path() const { return path_; }
+  const std::filesystem::path& path() const { return path_; }  // empty for setRows()
 
  private:
   std::vector<CsvRow> rows_;
-  std::string path_;
+  std::filesystem::path path_;
   std::size_t next_ = 0;
   double playhead_ = 0.0;       // seconds since first row
   double timeScale_ = 1.0;

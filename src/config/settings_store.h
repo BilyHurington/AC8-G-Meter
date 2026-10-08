@@ -4,6 +4,7 @@
 #include <string>
 
 #include "config/settings.h"
+#include "core/path_utf8.h"  // pathToUtf8 / pathFromUtf8, used with every path here
 
 namespace ft {
 
@@ -34,10 +35,6 @@ bool migrateAppDir(const std::filesystem::path& from, const std::filesystem::pat
                    std::string* error = nullptr);
 // Mission archive (ft::MissionArchive) next to the default settings file: ".../missions".
 std::filesystem::path defaultMissionsDir();
-
-// UTF-8 text for showing a path in ImGui or an error message. Never use path::string() for
-// that: on Windows it throws for characters outside the ANSI code page.
-std::string pathToUtf8(const std::filesystem::path& path);
 
 class SettingsStore {
  public:

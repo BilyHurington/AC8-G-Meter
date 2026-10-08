@@ -95,19 +95,6 @@ void migrateV1Metrics(MetricsSettings& m) {
 
 }  // namespace
 
-std::string pathToUtf8(const std::filesystem::path& path) {
-  // path::string() converts to the ANSI code page on Windows and throws for characters
-  // outside it; u8string() is lossless. C++20 returns std::u8string, so copy the bytes.
-  // Called from per-frame UI code, so it must not throw (u8string() can, for ill-formed
-  // UTF-16 such as an unpaired surrogate in a Windows file name).
-  try {
-    const std::u8string u8 = path.u8string();
-    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
-  } catch (const std::exception&) {
-    return "(path not representable as UTF-8)";
-  }
-}
-
 std::string settingsToJson(const Settings& s) {
   json visible = json::object();
   for (int i = 0; i < kMetricCount; ++i)

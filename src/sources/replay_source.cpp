@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <fstream>
 
+#include "core/path_utf8.h"
+
 namespace ft {
 
-bool loadCsvLog(const std::string& path, std::vector<CsvRow>& rows, std::string* error) {
+bool loadCsvLog(const std::filesystem::path& path, std::vector<CsvRow>& rows, std::string* error) {
+  const std::string name = pathToUtf8(path);  // for error messages
   std::ifstream file(path, std::ios::binary);
   if (!file.is_open()) {
-    if (error) *error = "cannot open '" + path + "'";
+    if (error) *error = "cannot open '" + name + "'";
     return false;
   }
   rows.clear();
@@ -21,7 +24,7 @@ bool loadCsvLog(const std::string& path, std::vector<CsvRow>& rows, std::string*
     if (first == std::string_view::npos || s[first] == '#') continue;
     if (!headerSeen) {
       if (s != csvHeader()) {
-        if (error) *error = path + ":" + std::to_string(lineNo) + ": unexpected header (expected '" +
+        if (error) *error = name + ":" + std::to_string(lineNo) + ": unexpected header (expected '" +
                             std::string(csvHeader()) + "')";
         return false;
       }
@@ -31,19 +34,19 @@ bool loadCsvLog(const std::string& path, std::vector<CsvRow>& rows, std::string*
     std::string rowError;
     std::optional<CsvRow> row = parseCsvRow(s, &rowError);
     if (!row) {
-      if (error) *error = path + ":" + std::to_string(lineNo) + ": " + rowError;
+      if (error) *error = name + ":" + std::to_string(lineNo) + ": " + rowError;
       return false;
     }
     rows.push_back(std::move(*row));
   }
   if (!headerSeen) {
-    if (error) *error = path + ": missing header";
+    if (error) *error = name + ": missing header";
     return false;
   }
   return true;
 }
 
-bool ReplaySource::load(const std::string& path, std::string* error) {
+bool ReplaySource::load(const std::filesystem::path& path, std::string* error) {
   std::vector<CsvRow> rows;
   if (!loadCsvLog(path, rows, error)) return false;
   setRows(std::move(rows));

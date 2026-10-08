@@ -7,6 +7,7 @@
 #include "core/kinematics.h"
 #include "core/math.h"
 #include "core/metrics.h"
+#include "core/path_utf8.h"
 
 using namespace ft;
 using doctest::Approx;
@@ -282,4 +283,13 @@ TEST_CASE("KinematicsEstimator: velocity slope and position quadratic fit") {
   e.add(0.0, {}, Vec3{});
   e.add(0.01, {}, Vec3{});
   CHECK_FALSE(e.hasAcceleration());  // needs 3 points
+}
+
+TEST_CASE("path_utf8: non-ASCII paths round-trip through UTF-8") {
+  // "飞行/Ü.csv" spelled as UTF-8 bytes, so the test does not depend on the source encoding.
+  const std::string utf8 = "\xE9\xA3\x9E\xE8\xA1\x8C/\xC3\x9C.csv";
+  const std::filesystem::path p = pathFromUtf8(utf8);
+  CHECK(pathToUtf8(p) == utf8);
+  CHECK(pathToUtf8(p.filename()) == "\xC3\x9C.csv");
+  CHECK(pathToUtf8(pathFromUtf8("")).empty());
 }

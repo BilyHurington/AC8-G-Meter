@@ -1,13 +1,15 @@
 #include "sources/csv_recorder.h"
 
+#include "core/path_utf8.h"
+
 namespace ft {
 
-bool CsvRecorder::open(const std::string& path, std::string* error) {
+bool CsvRecorder::open(const std::filesystem::path& path, std::string* error) {
   close();
   // Binary mode: '\n' line endings on every platform, so logs diff cleanly.
   file_.open(path, std::ios::out | std::ios::trunc | std::ios::binary);
   if (!file_.is_open()) {
-    if (error) *error = "cannot open '" + path + "' for writing";
+    if (error) *error = "cannot open '" + pathToUtf8(path) + "' for writing";
     return false;
   }
   path_ = path;

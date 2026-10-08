@@ -93,7 +93,7 @@ void ProtoApp::drawDebugPanel(float screenW, float screenH) {
     ImGui::BeginDisabled(replayIndex_ < 0);
     if (ImGui::Button("Load and play")) {
       std::string error;
-      const std::string path = replayFiles_[static_cast<std::size_t>(replayIndex_)].string();
+      const std::filesystem::path& path = replayFiles_[static_cast<std::size_t>(replayIndex_)];
       if (replay_.load(path, &error)) {
         replayStatus_ = "Loaded " + std::to_string(replay_.rows().size()) + " rows";
         sourceKind_ = SourceKind::Replay;
@@ -115,7 +115,7 @@ void ProtoApp::drawDebugPanel(float screenW, float screenH) {
   if (recorder_.isOpen()) {
     ImGui::SameLine();
     ImGui::TextColored(kWarn, "REC  %zu rows", recorder_.rowsWritten());
-    ImGui::TextWrapped("%s", recorder_.path().c_str());
+    ImGui::TextWrapped("%s", pathToUtf8(recorder_.path()).c_str());
   } else if (!recordStatus_.empty()) {
     ImGui::TextWrapped("%s", recordStatus_.c_str());
   } else {
@@ -233,7 +233,7 @@ void ProtoApp::simulatorControls() {
 
 void ProtoApp::replayControls() {
   ImGui::SeparatorText("Replay");
-  ImGui::TextWrapped("%s", replay_.path().empty() ? "(in-memory log)" : replay_.path().c_str());
+  ImGui::TextWrapped("%s", replay_.path().empty() ? "(in-memory log)" : pathToUtf8(replay_.path()).c_str());
   char overlay[48];
   std::snprintf(overlay, sizeof overlay, "%.1f / %.1f s", replay_.progress() * replay_.durationS(),
                 replay_.durationS());

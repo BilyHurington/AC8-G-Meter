@@ -8,13 +8,13 @@ A G-meter for **Ace Combat 8: Wings of Theve**. It draws a clean, HUD-styled tex
 - **Mission debrief.** Includes an interactive full-mission G chart (zoom, pan, hover). It shows peak G and sustained G (spikes shorter than 0.2 s removed), plus the best and worst 1/5/10/30/60 s average G and high-G episodes.
 - **Mission history.** Every sortie is saved as JSON plus a CSV trace that opens in Excel or Python. Past debriefs can be reopened from the history window.
 
-Written in C++20 with Dear ImGui, as layered libraries (core / config / ui / storage) designed to drop into a UE4SS mod. Current stage: a standalone macOS prototype (SDL3 + Metal) driven by a physics-based flight simulator and replayable flight logs. The Windows / UE4SS integration comes next.
+Written in C++20 with Dear ImGui, as layered libraries (core / config / ui / storage) designed to drop into a UE4SS mod. Current stage: standalone prototypes for macOS (SDL3 + Metal) and Windows (Win32 + Direct3D 12), driven by a physics-based flight simulator and replayable flight logs. The UE4SS integration into the game comes next.
 
 ---
 
 **AC8 G-Meter（AC8 过载表）**：《皇牌空战8：Wings of Theve》的 G 值显示叠加层 Mod。在游戏画面上以透明文字的形式实时显示 G 值、G Onset、迎角等飞行数据，并在任务结束后给出飞行统计。不修改原版 HUD。
 
-**当前阶段：** macOS 独立原型。使用模拟飞行数据和可回放的 CSV 日志，不依赖游戏本体。之后会移植到 Windows，通过 UE4SS 接入 AC8。
+**当前阶段：** macOS 与 Windows 独立原型。使用模拟飞行数据和可回放的 CSV 日志，不依赖游戏本体。下一步通过 UE4SS 接入 AC8。
 
 ## 功能
 
@@ -47,7 +47,7 @@ Written in C++20 with Dear ImGui, as layered libraries (core / config / ui / sto
 |---|---|
 | `Ctrl+F8` | 打开/关闭设置菜单 |
 | `Ctrl+F9` | 进入/退出叠加层编辑（拖动）模式 |
-| `Ctrl+F1` | 原型调试面板（仅 macOS 原型） |
+| `Ctrl+F1` | 原型调试面板（仅独立原型） |
 
 在 macOS 上，按 `Cmd` 代替 `Ctrl` 也可以触发。设置菜单里可以修改快捷键。
 
@@ -83,6 +83,14 @@ ctest --test-dir build --output-on-failure
 ```bash
 ./build/apps/macos_proto/ac8_gmeter_proto
 ```
+
+Windows（Win32 + Direct3D 12，与游戏内叠加层使用相同的 ImGui 后端）：
+
+```powershell
+.\build\apps\win_proto\ac8_gmeter_proto.exe
+```
+
+两个平台的参数相同；Windows 上 `--size` 以像素为单位，默认设置文件为 `%APPDATA%\AC8GMeter\settings.json`。
 
 常用参数：
 
@@ -143,7 +151,9 @@ src/sources   质点飞行模型（带真值）、模拟数据源、CSV 回放�
 src/config    设置模型与 JSON 持久化（宽松读取、范围钳制、原子写入、防抖保存）
 src/storage   任务历史：任务保存为 JSON + CSV、列表、读取、删除、保留数量上限（后台工作线程）
 src/ui        仅依赖 Dear ImGui：HUD 叠加层、设置菜单、任务总结与 G 曲线、任务历史窗口、布局计算
-apps/macos_proto  SDL3 + Metal 宿主：模拟的游戏画面和调试面板
+apps/proto_common  两个原型宿主共用：模拟的游戏画面、调试面板、命令行
+apps/macos_proto  SDL3 + Metal 宿主
+apps/win_proto    Win32 + Direct3D 12 宿主
 apps/replay_cli   无界面回放、统计、回归检查、日志生成
 apps/latency_bench  不同采样率与噪声下 G 显示延迟/误差基准（自适应 vs 固定滤波）
 tests/        doctest 测试

@@ -166,7 +166,7 @@ void ProtoApp::shutdown() {
 std::string ProtoApp::missionLabel() const {
   if (sourceKind_ == SourceKind::Simulator) return std::string("Simulator: ") + scenarioName(sim_.options().scenario);
   return "Replay: " + (replay_.path().empty() ? std::string("(in-memory log)")
-                                               : pathToUtf8(std::filesystem::path(replay_.path()).filename()));
+                                               : pathToUtf8(replay_.path().filename()));
 }
 
 std::optional<std::pair<int, int>> ProtoApp::takeResizeRequest() {
@@ -186,14 +186,20 @@ void ProtoApp::restartSource() {
 void ProtoApp::setRecording(bool on) {
   if (!on) {
     if (recorder_.isOpen())
-      recordStatus_ = "Saved " + std::to_string(recorder_.rowsWritten()) + " rows to " + recorder_.path();
+      recordStatus_ = "Saved " + std::to_string(recorder_.rowsWritten()) + " rows to " + pathToUtf8(recorder_.path());
     recorder_.close();
     return;
   }
   const std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm local{};
+#if defined(_WIN32)
+  localtime_s(&local, &t);
+#else
+  localtime_r(&t, &local);
+#endif
   char name[64];
-  std::strftime(name, sizeof name, "ac8_flight_%Y%m%d_%H%M%S.csv", std::localtime(&t));
-  const std::string path = (config_.recordDir / name).string();
+  std::strftime(name, sizeof name, "ac8_flight_%Y%m%d_%H%M%S.csv", &local);
+  const std::filesystem::path path = config_.recordDir / name;
   std::string error;
   if (!recorder_.open(path, &error)) {
     recordStatus_ = "Cannot record: " + error;

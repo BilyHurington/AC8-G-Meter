@@ -6,12 +6,12 @@
 //                       [--menu] [--edit] [--history] [--no-debug] [--end-mission-at <s>] [--velocity-noise <m/s>]
 //                       [--missions <dir>]
 //                       [--screenshot <file.png> [--frames N]]
-#include <cctype>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -24,61 +24,11 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include "proto_app.h"
+#include "proto_cli.h"
 
 namespace fs = std::filesystem;
 
 namespace {
-
-struct Args {
-  std::string settingsPath;
-  std::string missionsDir;
-  std::string screenshotPath;
-  int frames = 120;
-  int width = 1600, height = 900;
-  ft::ProtoConfig proto;
-};
-
-std::string squash(const char* s) {  // "Pull-up / push-over" -> "pulluppushover"
-  std::string out;
-  for (; *s; ++s)
-    if (std::isalnum(static_cast<unsigned char>(*s))) out += static_cast<char>(std::tolower(static_cast<unsigned char>(*s)));
-  return out;
-}
-
-bool parseArgs(int argc, char** argv, Args& a) {
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    const bool hasValue = i + 1 < argc;
-    if (arg == "--settings" && hasValue) a.settingsPath = argv[++i];
-    else if (arg == "--screenshot" && hasValue) a.screenshotPath = argv[++i];
-    else if (arg == "--frames" && hasValue) a.frames = std::max(1, std::atoi(argv[++i]));
-    else if (arg == "--missions" && hasValue) a.missionsDir = argv[++i];
-    else if (arg == "--menu") a.proto.openMenu = true;
-    else if (arg == "--history") a.proto.openHistory = true;
-    else if (arg == "--edit") a.proto.editMode = true;
-    else if (arg == "--no-debug") a.proto.debugPanel = false;
-    else if (arg == "--end-mission-at" && hasValue) a.proto.endMissionAtS = std::atof(argv[++i]);
-    else if (arg == "--velocity-noise" && hasValue) a.proto.velocityNoiseMS = std::atof(argv[++i]);
-    else if (arg == "--size" && hasValue) {
-      if (std::sscanf(argv[++i], "%dx%d", &a.width, &a.height) != 2) return false;
-    } else if (arg == "--scenario" && hasValue) {
-      const std::string want = squash(argv[++i]);
-      for (int s = 0; s < static_cast<int>(ft::Scenario::Count); ++s)
-        if (squash(ft::scenarioName(static_cast<ft::Scenario>(s))) == want) a.proto.scenario = static_cast<ft::Scenario>(s);
-      if (!a.proto.scenario) return false;
-    } else {
-      return false;
-    }
-  }
-  return true;
-}
-
-fs::path firstExisting(std::initializer_list<fs::path> candidates) {
-  std::error_code ec;
-  for (const auto& p : candidates)
-    if (fs::exists(p, ec)) return p;
-  return *candidates.begin();
-}
 
 // Writes BGRA8 pixels as an opaque PNG via ImageIO.
 bool writePng(const std::string& path, const void* bgra, int w, int h, size_t bytesPerRow) {
@@ -106,41 +56,18 @@ bool writePng(const std::string& path, const void* bgra, int w, int h, size_t by
 }  // namespace
 
 int main(int argc, char** argv) {
-  Args args;
-  if (!parseArgs(argc, argv, args)) {
-    std::fprintf(stderr,
-                 "usage: %s [--settings file.json] [--missions dir] [--scenario name] [--size WxH]\n"
-                 "          [--menu] [--edit] [--history] [--no-debug] [--end-mission-at seconds] [--velocity-noise m/s]\n"
-                 "          [--screenshot out.png [--frames N]]\n",
-                 argv[0]);
+  ft::ProtoCommandLine args;
+  if (!ft::parseProtoCommandLine(std::vector<std::string>(argv + 1, argv + argc), args)) {
+    std::fprintf(stderr, "usage: %s %s", argv[0], ft::protoUsage());
     return 2;
   }
   const bool screenshotMode = !args.screenshotPath.empty();
+  const std::string screenshotPath = ft::pathToUtf8(args.screenshotPath);
 
   // Paths: assets/replays next to the executable (copied post-build), else the source tree.
-  const fs::path base = SDL_GetBasePath() ? fs::path(SDL_GetBasePath()) : fs::current_path();
-  const fs::path src = FT_SOURCE_DIR;
-  if (args.settingsPath.empty()) {
-    // Settings and mission history saved before the rename to AC8 G-Meter move along.
-    std::string migrateError;
-    if (ft::migrateAppDir(ft::legacySettingsPath().parent_path(), ft::defaultSettingsPath().parent_path(),
-                          &migrateError))
-      std::fprintf(stderr, "moved settings and missions to %s\n",
-                   ft::pathToUtf8(ft::defaultSettingsPath().parent_path()).c_str());
-    else if (!migrateError.empty())
-      std::fprintf(stderr, "%s\n", migrateError.c_str());
-  }
-  args.proto.settingsPath = args.settingsPath.empty() ? ft::defaultSettingsPath() : fs::path(args.settingsPath);
-  // Mission history next to the settings file (a custom --settings keeps its missions with it).
-  args.proto.missionsDir = !args.missionsDir.empty() ? fs::path(args.missionsDir)
-                           : args.settingsPath.empty() ? ft::defaultMissionsDir()
-                                                       : args.proto.settingsPath.parent_path() / "missions";
-  args.proto.assetsDir = firstExisting({base / "assets", src / "assets"});
-  args.proto.replayDirs = {base / "replays", src / "data" / "replays"};
+  const fs::path base = SDL_GetBasePath() ? ft::pathFromUtf8(SDL_GetBasePath()) : fs::current_path();
   const char* home = std::getenv("HOME");
-  std::error_code ec;
-  args.proto.recordDir = (home && fs::is_directory(fs::path(home) / "Desktop", ec)) ? fs::path(home) / "Desktop"
-                                                                                    : fs::temp_directory_path(ec);
+  ft::resolveProtoPaths(args, base, FT_SOURCE_DIR, home ? fs::path(home) / "Desktop" : fs::path());
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -252,9 +179,9 @@ int main(int argc, char** argv) {
         [cmd commit];
         if (capture) {
           [cmd waitUntilCompleted];
-          const bool ok = writePng(args.screenshotPath, readback.contents, w, h, bytesPerRow);
+          const bool ok = writePng(screenshotPath, readback.contents, w, h, bytesPerRow);
           std::printf("%s %s (%dx%d px, %.0fx%.0f pt)\n", ok ? "wrote" : "FAILED to write",
-                      args.screenshotPath.c_str(), w, h, static_cast<double>(io.DisplaySize.x),
+                      screenshotPath.c_str(), w, h, static_cast<double>(io.DisplaySize.x),
                       static_cast<double>(io.DisplaySize.y));
           done = true;
         }
