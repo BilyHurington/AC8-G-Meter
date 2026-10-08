@@ -20,6 +20,10 @@ struct TimeView {
 TimeView zoomView(TimeView v, double anchorT, double factor, double minT, double maxT, double minSpan);
 // Shifts the window by deltaT, stopping at the data limits (the span never changes).
 TimeView panView(TimeView v, double deltaT, double minT, double maxT);
+// A view that shows the span [s0, s1]: v itself when the span is already inside it; else v
+// panned to centre the span when it fits (zoom kept); else the span plus 10 % either side.
+// Always within [minT, maxT].
+TimeView revealSpan(TimeView v, double s0, double s1, double minT, double maxT);
 
 // Tick positions in [lo, hi] at a step from `steps` (ascending) that is at least
 // minSpacing / unitsToPixels apart: the smallest step whose spacing on screen is readable.

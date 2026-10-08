@@ -212,7 +212,7 @@ MissionReport MissionTracker::finish(bool aborted) {
   r.aborted = aborted;
   r.stats = stats_;
   r.trace = std::move(trace_);
-  r.windowed = computeWindowedAverages(r.trace);
+  r.windowed = computeWindowedAverages(r.trace, r.stats.durationS);
   trace_ = {};
   trace_.hz = r.trace.hz;
   restartTrace(0.0);

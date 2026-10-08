@@ -28,9 +28,17 @@ class GChart {
   void setOverlay(ChartSeries s) { overlay_ = s; }
 
   // A time span to shade on the next draw() only (e.g. the window of the row hovered in the
-  // results table). warm: a maximum (orange), else a minimum (blue).
+  // results table: set it before draw() in the same frame, see height()). warm: a maximum
+  // (orange), else a minimum (blue). When a new span is outside the zoomed view, the view
+  // pans (or zooms out) to show it, once, unless the user is dragging the chart.
   void setHighlight(double t0, double t1, bool warm) { highlight_ = Highlight{t0, t1, warm, true}; }
-  bool highlightPending() const { return highlight_.set; }  // set and not drawn yet
+  bool highlightDrawn() const { return shown_.set; }  // the last draw() shaded a span
+  TimeView highlightSpan() const { return {shown_.t0, shown_.t1}; }  // ... this one
+  TimeView view() const { return view_; }
+
+  // Height draw() takes for a plot of plotHeight (header line included), so a caller can
+  // reserve the space, lay out what sets the highlight, and draw the chart into it afterwards.
+  static float height(float plotHeight);
 
  private:
   struct ReportKey {
@@ -49,6 +57,7 @@ class GChart {
 
   ChartSeries overlay_ = ChartSeries::None;
   Highlight highlight_;
+  Highlight shown_;  // drawn by the last draw() (a new span reveals itself once)
   bool hasSustained_ = false;  // of the current report's trace
   ReportKey key_;
   bool viewValid_ = false;

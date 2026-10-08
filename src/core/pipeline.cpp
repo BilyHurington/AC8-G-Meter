@@ -217,7 +217,7 @@ struct TelemetryPipeline::Impl {
 
     ledger.accept(verdict, kin.gate().held());
     if (extremeG) ledger.countExtremeG();
-    session.add(m, stepDt, countTime ? stepDt : 0.0);
+    session.add(m, stepDt, countTime ? stepDt : 0.0, windows.state());
     if (m.valid) recent.record(m.g, stepDt);
     current = m;
 

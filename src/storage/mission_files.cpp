@@ -311,6 +311,16 @@ bool missionFromJson(std::string_view text, MissionReport& r, MissionIndexEntry&
   readDouble(*stats, "max_speed_ms", s.maxSpeed);
   readDouble(*stats, "longest_high_g_s", s.longestHighGS);
   readDouble(*stats, "total_high_g_s", s.totalHighGS);
+  if (schema == 1) {
+    // Schema 1 had one kind of extreme, from the open/close-filtered G: the closest match is
+    // the sustained value. No peak was recorded (MissionReport::legacyFilteredG).
+    r.legacyFilteredG = true;
+    s.hasSustainedData = s.hasGData;
+    s.sustainedMaxG = s.maxG;
+    s.sustainedMaxGAtS = s.maxGAtS;
+    s.sustainedMinG = s.minG;
+    s.sustainedMinGAtS = s.minGAtS;
+  }
   if (const auto it = stats->find("high_g_episodes"); it != stats->end() && it->is_number_integer())
     s.highGEpisodes = static_cast<int>(std::clamp<std::int64_t>(it->get<std::int64_t>(), 0, 1'000'000'000));
   if (const auto it = stats->find("time_in_g_bin_s"); it != stats->end() && it->is_array() &&

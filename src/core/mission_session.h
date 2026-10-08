@@ -32,7 +32,8 @@ class MissionSession {
   void configure(const PipelineConfig& cfg) { feed_.configure(cfg, tracker_); }
   // An accepted sample in any phase but Paused. Mission time advances by missionDtS while
   // Active; valid metrics count in the mission (Active) and feed the sustained path (always).
-  void add(const FlightMetrics& m, double stepDtS, double missionDtS);
+  // filter: the live G path's windows and noise (the sustained path's pre-smoothing).
+  void add(const FlightMetrics& m, double stepDtS, double missionDtS, const FilterState& filter = {});
   // Discontinuity in the G stream (gap, pause, teleport): the sustained path restarts
   // (MissionFeed::restart). endEpisode: the aircraft state jumped.
   void restartSustained(bool endEpisode) { feed_.restart(tracker_, true, endEpisode); }

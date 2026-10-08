@@ -213,13 +213,91 @@ TEST_CASE("sustained filter: bounded delay and memory, width 0 passes through") 
     }
     if (lastOut >= 0.0) worst = std::max(worst, t - lastOut);
   }
-  CHECK(worst <= 0.025 + 0.4 + 3.0 / 60.0 + 1e-9);  // W / 8 + 2 W, a frame per look-ahead stage
+  CHECK(worst <= 0.025 + 0.4 + 3.0 / 60.0 + 1e-9);  // P / 2 + 2 W, a frame per look-ahead stage
   f.flush();
   CHECK(f.pending() == 0);
 
   SustainedFilter stuck(0.2);
   for (int i = 0; i < 3 * static_cast<int>(ExcursionFilter::kMaxPending); ++i) stuck.push(1.0, 1.0);
   CHECK(stuck.pending() <= 6 * ExcursionFilter::kMaxPending);
+}
+
+TEST_CASE("centred mean: the width can change without completing anything early") {
+  // A ramp: every complete symmetric window gives back the centre value exactly, so any
+  // truncated (lopsided) window would show.
+  CentredMean m;
+  m.setWidth(0.05);
+  m.setMaxWidth(0.1);
+  std::vector<Sample> out;
+  Sample s;
+  for (int i = 0; i < 240; ++i) {
+    const double t = i / 60.0;
+    if (i == 60) m.adjustWidth(0.1);    // wider
+    if (i == 150) m.adjustWidth(0.05);  // narrower again
+    m.push(t, 3.0 * t);
+    while (m.pop(s)) out.push_back(s);
+  }
+  m.flush();
+  while (m.pop(s)) out.push_back(s);
+  REQUIRE(out.size() == 240);
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    CHECK(out[i].t == Approx(static_cast<double>(i) / 60.0));
+    if (out[i].t > 0.1 && out[i].t < 3.9) CHECK(out[i].v == Approx(3.0 * out[i].t));
+  }
+  CHECK(m.width() == Approx(0.05));
+  m.adjustWidth(0.5);  // beyond the kept history: limited to the max width
+  CHECK(m.width() == Approx(0.1));
+}
+
+TEST_CASE("pre-smoothing follows the noise of the raw G, between W / 4 and W / 2") {
+  // One slope (m = 1) is the plain least-squares standard error sqrt(12 / (n (n^2 - 1))) / dt.
+  CHECK(meanSlopeNoiseG(5, 1, 1.0 / 60.0) == Approx(std::sqrt(12.0 / (5.0 * 24.0)) * 60.0 / kG0));
+  CHECK(meanSlopeNoiseG(5, 7, 1.0 / 60.0) < meanSlopeNoiseG(5, 3, 1.0 / 60.0));
+  CHECK(meanSlopeNoiseG(1, 3, 0.01) == 0.0);
+
+  FilterState f;
+  f.input = FilterState::Input::Velocity;
+  f.noiseReady = true;
+  f.sampleRateHz = 60.0;
+  f.accelWindowS = 0.08;
+  // Clean data: W / 4, the documented bump cut-off (removed <= 0.75 W, full from 1.25 W).
+  f.velocityNoiseMS = 0.0;
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.05));
+  f.velocityNoiseMS = 0.01;
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.05));
+  // 60 Hz, 0.3 m/s: ~0.58 G per raw sample; 7 samples (W / 2) bring it to ~0.19 G.
+  f.velocityNoiseMS = 0.3;
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.1));
+  f.velocityNoiseMS = 1.0;  // the target is out of reach: the widest
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.1));
+  // 240 Hz: 0.3 m/s needs no more than W / 4; 0.5 m/s the shortest width in between that
+  // meets the target.
+  f.sampleRateHz = 240.0;
+  f.velocityNoiseMS = 0.3;
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.05));
+  f.velocityNoiseMS = 0.5;
+  const double p = sustainedPreSmoothingS(0.2, f);
+  CHECK(p > 0.05);
+  CHECK(p < 0.1);
+  const int n = static_cast<int>(std::floor(0.08 * 240.0 + 1e-6)) + 1;
+  const int m = 2 * static_cast<int>(std::floor(0.5 * p * 240.0 + 1e-6)) + 1;
+  CHECK(0.5 * meanSlopeNoiseG(n, m, 1.0 / 240.0) <= kSustainedNoiseTargetG);
+  CHECK(0.5 * meanSlopeNoiseG(n, m - 2, 1.0 / 240.0) > kSustainedNoiseTargetG);
+  // Unknown noise (not measured yet, position-only input): W / 4. W = 0: none.
+  f.noiseReady = false;
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.05));
+  f.noiseReady = true;
+  f.input = FilterState::Input::PositionOnly;
+  CHECK(sustainedPreSmoothingS(0.2, f) == Approx(0.05));
+  CHECK(sustainedPreSmoothingS(0.0, f) == 0.0);
+
+  // The filter clamps what it is given to [W / 4, W / 2].
+  SustainedFilter sf(0.2);
+  CHECK(sf.preSmoothing() == Approx(0.05));
+  sf.setPreSmoothing(1.0);
+  CHECK(sf.preSmoothing() == Approx(0.1));
+  sf.setPreSmoothing(0.0);
+  CHECK(sf.preSmoothing() == Approx(0.05));
 }
 
 // ---- dual values in the pipeline ------------------------------------------------------
@@ -300,6 +378,27 @@ TEST_CASE("H1: noisy input gives unbiased sustained values, and real turns keep 
     CHECK(st.maxG >= st.sustainedMaxG);
     CHECK(st.minG <= st.sustainedMinG);
   }
+  // The extremes over seeds (the reviewed bias): at 60 Hz the pre-smoothing widens to W / 2.
+  // 0.3 m/s: within 0.1 G (before: +0.19 / -0.15); 1 m/s: ~0.35 G, the documented residual
+  // (W / 2 is the limit; before: +0.64 / -0.51).
+  for (const double sigma : {0.3, 1.0}) {
+    CAPTURE(sigma);
+    double maxSum = 0.0, minSum = 0.0;
+    constexpr int kSeeds = 10;
+    for (int seed = 1; seed <= kSeeds; ++seed) {
+      FlightSpec spec;
+      spec.nz = turn;
+      spec.seconds = 6.0;
+      spec.noiseSigma = sigma;
+      spec.seed = static_cast<std::uint32_t>(seed * 101);
+      const Flight f = flyMission(spec);
+      maxSum += f.report.stats.sustainedMaxG;
+      minSum += f.report.stats.sustainedMinG;
+    }
+    const double tol = sigma < 0.5 ? 0.12 : 0.4;
+    CHECK(maxSum / kSeeds - 7.0 <= tol);
+    CHECK(1.0 - minSum / kSeeds <= tol);
+  }
   // Very noisy 60 Hz data: the real 3 s turn stays one episode (before: none).
   FlightSpec heavy;
   heavy.nz = turn;
@@ -308,6 +407,17 @@ TEST_CASE("H1: noisy input gives unbiased sustained values, and real turns keep 
   const Flight f = flyMission(heavy);
   CHECK(f.report.stats.highGEpisodes == 1);
   CHECK(f.report.stats.longestHighGS > 2.5);
+}
+
+TEST_CASE("clean data keeps the W / 4 pre-smoothing: 0.75 W bumps gone, 1.5 W bumps at full height") {
+  for (const auto& [len, expected] : {std::pair{0.15, 1.0}, std::pair{0.3, 9.0}}) {
+    CAPTURE(len);
+    FlightSpec spec;
+    spec.nz = [len](double t) { return t >= 2.0 && t < 2.0 + len ? 9.0 : 1.0; };
+    const Flight f = flyMission(spec);
+    CHECK(f.report.stats.sustainedMaxG == Approx(expected).epsilon(0.01));
+    CHECK(f.report.stats.maxG > 8.5);  // the peak keeps it either way
+  }
 }
 
 TEST_CASE("H3: an excursion in progress when the mission starts is judged with the samples before it") {

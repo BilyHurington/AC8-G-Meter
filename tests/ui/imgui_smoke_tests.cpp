@@ -8,6 +8,7 @@
 #include <thread>
 
 #include <imgui.h>
+#include <imgui_internal.h>  // ActivateItemByID, FindWindowByName (driving the menu by item ID)
 
 #include "config/hotkey_names.h"
 #include "core/pipeline.h"
@@ -444,6 +445,103 @@ TEST_CASE("keep-missions changes that delete saved missions need confirmation") 
   CHECK(store.settings().history.maxSavedMissions == 50);
 }
 
+namespace {
+
+// One frame of the settings menu alone, with `saved` missions in a counted archive.
+struct MenuDriver {
+  SettingsMenu menu;
+  SettingsStore& store;
+  bool open = true, editMode = false;
+  int changes = 0;
+  explicit MenuDriver(SettingsStore& s) : store(s) {}
+
+  void frame(int saved) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    MissionArchiveInfo archive;
+    archive.available = true;
+    archive.savedMissions = saved;
+    if (menu.draw(store, open, editMode, false, archive, FilterState{}, 0.0).changed) ++changes;
+    ImGui::Render();
+    if (ImDrawData* dd = ImGui::GetDrawData(); dd && dd->Textures)
+      for (ImTextureData* tex : *dd->Textures)
+        if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_Destroyed) tex->SetStatus(ImTextureStatus_OK);
+  }
+  // IDs of the "Keep missions" InputInt parts: InputScalar pushes the label, then submits the
+  // text field as "" and the step buttons as "-" / "+".
+  static ImGuiID keepPart(const char* part) {
+    ImGuiWindow* w = ImGui::FindWindowByName("Flight Telemetry Settings###ft_settings");
+    REQUIRE(w);
+    return ImHashStr(part, 0, w->GetID("Keep missions"));
+  }
+  static bool confirmOpen() { return ImGui::FindWindowByName("Delete older missions?") != nullptr &&
+                                     ImGui::FindWindowByName("Delete older missions?")->Active; }
+  static ImGuiID confirmButton(const char* label) {
+    ImGuiWindow* w = ImGui::FindWindowByName("Delete older missions?");
+    REQUIRE(w);
+    return w->GetID(label);
+  }
+};
+
+}  // namespace
+
+TEST_CASE("keep missions: typing applies the value when editing ends, the step buttons at once") {
+  HeadlessImGui im(1920.0f, 3000.0f);  // tall: the whole menu is on screen
+  ImGui::GetIO().Fonts->AddFontDefault();
+  SettingsStore store(tmpSettings("keepmissions_typing.json"));
+  REQUIRE(store.settings().history.maxSavedMissions == 50);
+  MenuDriver d(store);
+  constexpr int kSaved = 40;
+  for (int i = 0; i < 3; ++i) d.frame(kSaved);
+
+  // Type "30" over "50" (the field selects all on activation): no intermediate "3" (which would
+  // ask to delete 37 missions), nothing applied while typing.
+  ImGui::ActivateItemByID(MenuDriver::keepPart(""));
+  d.frame(kSaved);
+  d.frame(kSaved);
+  REQUIRE(ImGui::GetActiveID() == MenuDriver::keepPart(""));
+  for (const char c : {'3', '0'}) {
+    ImGui::GetIO().AddInputCharacter(static_cast<unsigned>(c));
+    d.frame(kSaved);
+    d.frame(kSaved);
+    CHECK_FALSE(MenuDriver::confirmOpen());
+    CHECK(store.settings().history.maxSavedMissions == 50);
+  }
+  CHECK(d.changes == 0);
+  // Enter ends the edit: 30 of 40 saved deletes 10, which needs the confirmation.
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+  d.frame(kSaved);
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+  d.frame(kSaved);
+  d.frame(kSaved);
+  REQUIRE(MenuDriver::confirmOpen());
+  CHECK(store.settings().history.maxSavedMissions == 50);
+  ImGui::ActivateItemByID(MenuDriver::confirmButton("Apply"));
+  d.frame(kSaved);
+  d.frame(kSaved);
+  CHECK(store.settings().history.maxSavedMissions == 30);
+  CHECK_FALSE(MenuDriver::confirmOpen());
+  CHECK(d.changes == 1);
+
+  // "+" applies at once (raising never deletes), "-" below the saved count asks first.
+  ImGui::ActivateItemByID(MenuDriver::keepPart("+"));
+  d.frame(kSaved);
+  d.frame(kSaved);
+  CHECK(store.settings().history.maxSavedMissions == 31);
+  CHECK(d.changes == 2);
+  ImGui::ActivateItemByID(MenuDriver::keepPart("-"));
+  d.frame(kSaved);
+  d.frame(kSaved);
+  REQUIRE(MenuDriver::confirmOpen());  // 31 -> 30 with 40 saved: one more deleted
+  CHECK(store.settings().history.maxSavedMissions == 31);
+  ImGui::ActivateItemByID(MenuDriver::confirmButton("Cancel"));
+  d.frame(kSaved);
+  d.frame(kSaved);
+  CHECK_FALSE(MenuDriver::confirmOpen());
+  CHECK(store.settings().history.maxSavedMissions == 31);
+}
+
 TEST_CASE("history window: closing it abandons a pending load; a second click switches rows") {
   HeadlessImGui im;
   MissionArchive archive(freshArchiveDir("history_cancel"));
@@ -595,22 +693,66 @@ TEST_CASE("results screen: dual G rows, average-G table and its chart highlight"
   ImGui::GetIO().Fonts->AddFontDefault();
   GChart chart;
   bool open = true;
+  auto frameAt = [&](float x, float y, float wheel = 0.0f) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(x, y);
+    if (wheel != 0.0f) io.AddMouseWheelEvent(0.0f, wheel);
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    drawMissionSummary(*report, SummaryContext{}, chart, open, nullptr);
+    ImGui::Render();
+    if (ImDrawData* dd = ImGui::GetDrawData(); dd && dd->Textures)
+      for (ImTextureData* tex : *dd->Textures)
+        if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_Destroyed) tex->SetStatus(ImTextureStatus_OK);
+  };
+  frameAt(-100.0f, -100.0f);
+  frameAt(-100.0f, -100.0f);
+  // Sweep the mouse over the whole window, one frame per position after a frame away from it:
+  // a hovered row is highlighted in the same frame (the chart is drawn after the table), and
+  // the highlight goes with the mouse at once.
   int highlighted = 0;
-  // Sweep the mouse over the whole window: every row and cell gets hovered at some point.
+  float rowX = 0.0f, rowY = 0.0f;
   for (int y = 0; y < 1080; y += 12) {
     for (int x = 400; x < 1520; x += 160) {
-      ImGui::GetIO().AddMousePosEvent(static_cast<float>(x), static_cast<float>(y));
-      ImGuiIO& io = ImGui::GetIO();
-      io.DeltaTime = 1.0f / 60.0f;
-      ImGui::NewFrame();
-      drawMissionSummary(*report, SummaryContext{}, chart, open, nullptr);
-      ImGui::Render();
-      if (ImDrawData* dd = ImGui::GetDrawData(); dd && dd->Textures)
-        for (ImTextureData* tex : *dd->Textures)
-          if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_Destroyed) tex->SetStatus(ImTextureStatus_OK);
-      if (chart.highlightPending()) ++highlighted;
+      frameAt(5.0f, 5.0f);  // outside the window
+      CHECK_FALSE(chart.highlightDrawn());
+      frameAt(static_cast<float>(x), static_cast<float>(y));
+      if (chart.highlightDrawn() && ++highlighted == 1) {  // the first (top) row: 1 s
+        rowX = static_cast<float>(x);
+        rowY = static_cast<float>(y);
+      }
     }
   }
   CHECK(open);
-  CHECK(highlighted > 0);
+  REQUIRE(highlighted > 0);
+
+  // Zoomed in at the end of the mission, hovering that row pans the chart to its window.
+  frameAt(5.0f, 5.0f);
+  for (int y = 100; y < 700 && chart.view().span() > 10.0; y += 10)
+    for (int i = 0; i < 4; ++i) frameAt(1340.0f, static_cast<float>(y), 3.0f);
+  const TimeView zoomed = chart.view();
+  REQUIRE(zoomed.span() <= 10.0);
+  frameAt(rowX, rowY);
+  REQUIRE(chart.highlightDrawn());
+  const TimeView span = chart.highlightSpan();
+  REQUIRE(span.t1 - span.t0 == doctest::Approx(1.0));
+  CHECK((span.t0 < zoomed.t0 || span.t1 > zoomed.t1));  // it was out of view
+  CHECK(chart.view().span() == doctest::Approx(zoomed.span()));  // panned, zoom kept
+  CHECK(chart.view().t0 <= span.t0 + 1e-9);
+  CHECK(chart.view().t1 >= std::min(span.t1, report->trace.endS()) - 1e-9);
+  // Only when the hover starts: panning away while still hovering the row is not undone.
+  const TimeView revealed = chart.view();
+  frameAt(rowX, rowY);
+  CHECK(chart.view() == revealed);
+
+  // A schema-1 report (filtered values, no peak) draws too.
+  MissionReport legacy = *report;
+  legacy.legacyFilteredG = true;
+  for (int i = 0; i < 2; ++i) {
+    ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    drawMissionSummary(legacy, SummaryContext{}, chart, open, nullptr);
+    ImGui::Render();
+  }
+  CHECK(open);
 }

@@ -132,3 +132,27 @@ TEST_CASE("bucketAt clamps to the trace") {
   CHECK(bucketAt(t, -5.0) == 0);
   CHECK(bucketAt(t, 1e9) == 39);
 }
+
+TEST_CASE("revealSpan brings a highlighted span into the view") {
+  const TimeView v{10.0, 20.0};
+  CHECK(revealSpan(v, 12.0, 15.0, 0.0, 100.0) == v);  // already visible: unchanged
+  // Fits: panned to centre it, zoom kept.
+  const TimeView a = revealSpan(v, 50.0, 55.0, 0.0, 100.0);
+  CHECK(a.span() == doctest::Approx(10.0));
+  CHECK(a.t0 == doctest::Approx(47.5));
+  const TimeView b = revealSpan(v, 18.0, 23.0, 0.0, 100.0);  // partly out
+  CHECK(b.t0 <= 18.0);
+  CHECK(b.t1 >= 23.0);
+  // Near the end: clamped to the data.
+  const TimeView c = revealSpan(v, 97.0, 99.0, 0.0, 100.0);
+  CHECK(c == TimeView{90.0, 100.0});
+  // Longer than the view: zoomed out to it plus 10 % either side.
+  const TimeView d = revealSpan(v, 30.0, 60.0, 0.0, 100.0);
+  CHECK(d.t0 == doctest::Approx(27.0));
+  CHECK(d.t1 == doctest::Approx(63.0));
+  CHECK(revealSpan(v, 0.0, 100.0, 0.0, 100.0) == TimeView{0.0, 100.0});
+  // A span past the data is cut to it first.
+  const TimeView e = revealSpan(v, 95.0, 105.0, 0.0, 100.0);
+  CHECK(e.t1 == doctest::Approx(100.0));
+  CHECK(e.t0 <= 95.0);
+}

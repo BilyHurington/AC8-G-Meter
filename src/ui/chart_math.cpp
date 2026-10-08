@@ -32,6 +32,15 @@ TimeView panView(TimeView v, double deltaT, double minT, double maxT) {
   return clampView({v.t0 + deltaT, v.t1 + deltaT}, minT, maxT);
 }
 
+TimeView revealSpan(TimeView v, double s0, double s1, double minT, double maxT) {
+  s0 = std::max(s0, minT);
+  s1 = std::min(s1, maxT);
+  if (!(s1 >= s0) || (s0 >= v.t0 && s1 <= v.t1)) return v;
+  if (s1 - s0 <= v.span()) return panView(v, 0.5 * (s0 + s1) - 0.5 * (v.t0 + v.t1), minT, maxT);
+  const double margin = 0.1 * (s1 - s0);
+  return clampView({s0 - margin, s1 + margin}, minT, maxT);
+}
+
 std::vector<double> axisTicks(double lo, double hi, double unitsToPixels, double minSpacingPx,
                               const std::vector<double>& steps) {
   std::vector<double> ticks;

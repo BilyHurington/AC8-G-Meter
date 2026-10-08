@@ -80,7 +80,7 @@ std::shared_ptr<MissionReport> makeReport(std::uint32_t id, std::size_t buckets 
     p.highG = p.gMean > 4.0f;
     r->trace.push(p);
   }
-  r->windowed = computeWindowedAverages(r->trace);
+  r->windowed = computeWindowedAverages(r->trace, r->stats.durationS);
   return r;
 }
 
@@ -212,6 +212,7 @@ TEST_CASE("save -> list -> load round trip") {
   CHECK(r.extremeGThreshold == 15.0);
   CHECK(r.minExcursionS == 0.25);
   CHECK_FALSE(r.aborted);
+  CHECK_FALSE(r.legacyFilteredG);
   checkSameStats(r.stats, report->stats);
   checkSameTrace(r.trace, report->trace);
   // Stored as written (500 buckets = 25 s: the 30 s and 60 s windows are not valid).
@@ -316,13 +317,20 @@ TEST_CASE("schema 1 files (before the sustained statistics) still load") {
   REQUIRE(old.report);
   CHECK(old.error.empty());
   const MissionReport& r = *old.report;
-  CHECK(r.stats.maxG == report->stats.maxG);  // the peak values load as before
-  CHECK_FALSE(r.stats.hasSustainedData);       // absent: the UI shows "--"
+  // Schema 1's only extremes were the filtered G: they load as the sustained ones, and the
+  // report says there is no peak (the UI shows "--" and labels the chart as filtered).
+  CHECK(r.legacyFilteredG);
+  CHECK(r.stats.hasSustainedData == report->stats.hasGData);
+  CHECK(r.stats.sustainedMaxG == report->stats.maxG);
+  CHECK(r.stats.sustainedMaxGAtS == report->stats.maxGAtS);
+  CHECK(r.stats.sustainedMinG == report->stats.minG);
+  CHECK(r.stats.sustainedMinGAtS == report->stats.minGAtS);
+  CHECK(r.stats.maxG == report->stats.maxG);  // kept for the history list
   CHECK(r.minExcursionS == MissionReport{}.minExcursionS);
   REQUIRE(r.trace.size() == 40);
   for (float v : r.trace.gSustained) CHECK(std::isnan(v));
   // The N-second averages are computed from the loaded trace.
-  checkSameWindows(r.windowed, computeWindowedAverages(r.trace));
+  checkSameWindows(r.windowed, computeWindowedAverages(r.trace, r.stats.durationS));
   CHECK(r.windowed.at(0).valid);  // 1 s of a 2 s trace
 
   // A version from the future is refused.

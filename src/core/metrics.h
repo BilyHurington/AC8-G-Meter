@@ -131,6 +131,11 @@ struct MissionReport {
   double extremeGThreshold = 15.0;  // the threshold stats.extremeGSamples was counted with
   double minExcursionS = 0.2;       // W of the sustained statistics (0 = filter off)
   std::vector<WindowedG> windowed;  // kDefaultAverageWindowsS, from the trace
+  // Loaded from a schema-1 archive, written before peak and sustained G were told apart: its
+  // G extremes and trace G columns are that version's open/close-filtered G. The extremes
+  // load as the sustained ones (stats.sustained*, stats.maxG / minG keep the same values for
+  // the history list); there is no peak value, and the chart band / line are the filtered G.
+  bool legacyFilteredG = false;
   std::string label;                // host-provided name (map, scenario, replay file); may be empty
 };
 

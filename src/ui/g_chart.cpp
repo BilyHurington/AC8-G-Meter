@@ -77,6 +77,11 @@ float secondaryValue(const ChartPoint& p, ChartSeries s) {
 
 }  // namespace
 
+float GChart::height(float plotHeight) {
+  // The header line (frame height), item spacing, then the plot (see draw()).
+  return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y + std::max(plotHeight, ImGui::GetFontSize() * 6.0f);
+}
+
 void GChart::draw(const MissionReport& report, ImVec2 size) {
   const MissionTrace& trace = report.trace;
   const float fs = ImGui::GetFontSize();
@@ -122,6 +127,10 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
   dl->AddRect(m.min, m.max, ImGui::GetColorU32(ImGuiCol_Border), 3.0f);
   const Highlight highlight = highlight_;
   highlight_.set = false;  // one frame only
+  // A span that was not shown on the previous draw (the hover just started or moved on).
+  const bool newHighlight =
+      highlight.set && !(shown_.set && shown_.t0 == highlight.t0 && shown_.t1 == highlight.t1);
+  shown_ = highlight;
   if (trace.empty() || m.max.x - m.min.x < 10.0f || m.max.y - m.min.y < 10.0f) {
     const char* msg = "No trace recorded.";
     const ImVec2 ts = ImGui::CalcTextSize(msg);
@@ -157,6 +166,9 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
   }
   if (active && io.MouseDelta.x != 0.0f)
     view_ = panView(view_, -static_cast<double>(io.MouseDelta.x / plotW) * view_.span(), minT, maxT);
+  // A newly highlighted span outside the zoomed view: bring it into view, once (the user can
+  // pan away again while it stays highlighted), never while the user drags.
+  if (newHighlight && !active) view_ = revealSpan(view_, highlight.t0, highlight.t1, minT, maxT);
   m.view = view_;
 
   // ---- data (decimated per pixel column, cached) ----------------------------------------
@@ -301,6 +313,7 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
   labels.bottom = m.max.y;
 
   const MissionStats& st = report.stats;
+  const bool peak = st.hasGData && !report.legacyFilteredG;  // schema-1 archives have none
   // Marker positions are obstacles for every label, so no label hides a marker.
   auto inView = [&](double t) { return t >= view_.t0 && t <= view_.t1; };
   auto reserveMarker = [&](double t, double g) {
@@ -308,7 +321,7 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
     const ImVec2 p(m.x(t), m.y(static_cast<float>(g)));
     labels.boxes.emplace_back(p.x - 6.0f, p.y - 6.0f, p.x + 6.0f, p.y + 6.0f);
   };
-  if (st.hasGData) {
+  if (peak) {
     reserveMarker(st.maxGAtS, st.maxG);
     reserveMarker(st.minGAtS, st.minG);
   }
@@ -321,44 +334,76 @@ void GChart::draw(const MissionReport& report, ImVec2 size) {
   const ImVec2 thrSize = ImGui::CalcTextSize(thrLabel);
   const ImVec2 thrPos = labels.place(m.max.x - thrSize.x - fs * 0.4f, yThr - thrSize.y - 2.0f, thrSize, true);
   labelBox(dl, thrPos, col(kHudWarn, 0.9f), thrLabel);
-  auto marker = [&](double t, double g, bool above, bool sustained) {
+  // Marker shapes: a white diamond on the line (sustained), an orange dot on the band (peak).
+  auto shape = [&](double t, double g, bool sustained) {
     if (!inView(t)) return;
     const ImVec2 p(m.x(t), m.y(static_cast<float>(g)));
-    const ImVec4 c = sustained ? kSustainedMark : kHudWarn;
     if (sustained) {
       const float r = 4.5f;
       dl->AddQuadFilled(ImVec2(p.x, p.y - r), ImVec2(p.x + r, p.y), ImVec2(p.x, p.y + r), ImVec2(p.x - r, p.y),
                         col(ImVec4(0, 0, 0, 1), 0.8f));
-      dl->AddQuad(ImVec2(p.x, p.y - r), ImVec2(p.x + r, p.y), ImVec2(p.x, p.y + r), ImVec2(p.x - r, p.y), col(c, 1.0f),
-                  1.5f);
+      dl->AddQuad(ImVec2(p.x, p.y - r), ImVec2(p.x + r, p.y), ImVec2(p.x, p.y + r), ImVec2(p.x - r, p.y),
+                  col(kSustainedMark, 1.0f), 1.5f);
     } else {
-      dl->AddCircleFilled(p, 3.5f, col(c, 1.0f));
-      dl->AddCircle(p, 5.5f, col(c, 0.6f));
+      dl->AddCircleFilled(p, 3.5f, col(kHudWarn, 1.0f));
+      dl->AddCircle(p, 5.5f, col(kHudWarn, 0.6f));
     }
-    const std::string label =
-        std::string(sustained ? (above ? "SUS MAX " : "SUS MIN ") : (above ? "MAX " : "MIN ")) + gLabel(g);
-    const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
-    // Peak labels centred over / under their marker, sustained ones beside it.
+  };
+  // Label of a marker: peak labels centred over / under their marker, sustained ones beside
+  // it. When the placer has to move a label away from its marker (another label is there), a
+  // thin leader line joins them.
+  auto label = [&](double t, double g, bool above, bool sustained, const std::string& text) {
+    if (!inView(t)) return;
+    const ImVec2 p(m.x(t), m.y(static_cast<float>(g)));
+    const ImVec4 c = sustained ? kSustainedMark : kHudWarn;
+    const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
     const float lx = sustained ? std::clamp(p.x + 8.0f, m.min.x + 2.0f, m.max.x - ts.x - 2.0f)
                                : std::clamp(p.x - ts.x * 0.5f, m.min.x + 2.0f, m.max.x - ts.x - 2.0f);
     const float ly = sustained ? p.y - ts.y * 0.5f : (above ? p.y - ts.y - 6.0f : p.y + 6.0f);
     const ImVec2 at = labels.place(lx, ly, ts, above);
-    labelBox(dl, at, col(c, 1.0f), label.c_str());
+    if (std::abs(at.y - ly) > 1.0f) {
+      // From the marker's edge to the nearest point of the plate.
+      const float ex = std::clamp(p.x, at.x - 3.0f, at.x + ts.x + 3.0f);
+      const float ey = at.y + ts.y < p.y ? at.y + ts.y : (at.y > p.y ? at.y : p.y);
+      const float dx = ex - p.x, dy = ey - p.y;
+      const float len = std::sqrt(dx * dx + dy * dy);
+      if (len > 7.0f) dl->AddLine(ImVec2(p.x + dx / len * 6.0f, p.y + dy / len * 6.0f), ImVec2(ex, ey), col(c, 0.7f), 1.0f);
+    }
+    labelBox(dl, at, col(c, 1.0f), text.c_str());
   };
+  // Peak and sustained extreme at (almost) the same value and screen position: one label
+  // ("MAX +8.2 G (sus +8.2)"), instead of two plates fighting for the same place.
+  auto merged = [&](double peakT, double peakG, double susT, double susG) {
+    return peak && st.hasSustainedData && inView(peakT) && inView(susT) && std::abs(peakG - susG) <= 0.05 &&
+           std::abs(m.x(peakT) - m.x(susT)) <= 2.0f * fs;
+  };
+  const bool mergedMax = merged(st.maxGAtS, st.maxG, st.sustainedMaxGAtS, st.sustainedMaxG);
+  const bool mergedMin = merged(st.minGAtS, st.minG, st.sustainedMinGAtS, st.sustainedMinG);
   // Sustained first: when both coincide the peak dot stays visible inside the diamond.
   if (st.hasSustainedData) {
-    marker(st.sustainedMaxGAtS, st.sustainedMaxG, true, true);
-    marker(st.sustainedMinGAtS, st.sustainedMinG, false, true);
+    shape(st.sustainedMaxGAtS, st.sustainedMaxG, true);
+    shape(st.sustainedMinGAtS, st.sustainedMinG, true);
   }
-  if (st.hasGData) {
-    marker(st.maxGAtS, st.maxG, true, false);
-    marker(st.minGAtS, st.minG, false, false);
+  if (peak) {
+    shape(st.maxGAtS, st.maxG, false);
+    shape(st.minGAtS, st.minG, false);
+  }
+  if (st.hasSustainedData) {
+    if (!mergedMax) label(st.sustainedMaxGAtS, st.sustainedMaxG, true, true, "SUS MAX " + gLabel(st.sustainedMaxG));
+    if (!mergedMin) label(st.sustainedMinGAtS, st.sustainedMinG, false, true, "SUS MIN " + gLabel(st.sustainedMinG));
+  }
+  if (peak) {
+    label(st.maxGAtS, st.maxG, true, false,
+          "MAX " + gLabel(st.maxG) + (mergedMax ? " (sus " + formatNumber(st.sustainedMaxG, 1, true) + ")" : ""));
+    label(st.minGAtS, st.minG, false, false,
+          "MIN " + gLabel(st.minG) + (mergedMin ? " (sus " + formatNumber(st.sustainedMinG, 1, true) + ")" : ""));
   }
 
   // Legend, top left.
   {
-    const char* bandText = "live min-max";
-    const char* lineText = hasSustained_ ? "sustained" : "live mean";
+    // Schema-1 archives: band and line are that version's filtered G.
+    const char* bandText = report.legacyFilteredG ? "filtered min-max (v1 file)" : "live min-max";
+    const char* lineText = report.legacyFilteredG ? "filtered mean" : hasSustained_ ? "sustained" : "live mean";
     const float h = ImGui::GetTextLineHeight();
     const float w = ImGui::CalcTextSize(bandText).x + ImGui::CalcTextSize(lineText).x + fs * 4.6f;
     ImVec2 o(m.min.x + fs * 0.4f, m.min.y + fs * 0.3f);

@@ -48,12 +48,12 @@ void MissionSession::finish(bool aborted, const PipelineConfig& cfg) {
   for (std::size_t i = 0; i < consumers_.size(); ++i) consumers_[i]->onMissionEnded(lastReport_);
 }
 
-void MissionSession::add(const FlightMetrics& m, double stepDtS, double missionDtS) {
+void MissionSession::add(const FlightMetrics& m, double stepDtS, double missionDtS, const FilterState& filter) {
   if (active()) {
     tracker_.addTime(missionDtS);
     if (m.valid) tracker_.add(m, stepDtS);
   }
-  if (m.valid) feed_.add(tracker_, m, stepDtS, active());
+  if (m.valid) feed_.add(tracker_, m, stepDtS, active(), filter);
 }
 
 void MissionSession::resetGStats() {

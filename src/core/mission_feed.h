@@ -6,7 +6,9 @@
 //          -> MissionTracker::addSustained, at the mission time of the sample it came from
 //
 // With W > 0 the filter works on the unsmoothed G (FlightMetrics::gRaw): the display EMA would
-// stretch every bump by its tail. With W = 0 the live G passes straight through.
+// stretch every bump by its tail. With W = 0 the live G passes straight through. Its
+// pre-smoothing follows the noise of that raw G (sustainedPreSmoothingS, from the live path's
+// FilterState): wider at once when the noise grows, narrower after kPreReleaseS of less noise.
 //
 // The filter is fed continuously, in every phase but Paused, so that an excursion in progress
 // when a mission starts is judged with the samples before it; the mission only takes outputs
@@ -31,8 +33,12 @@ class MissionFeed {
   // old width and restarts the stream; the current episode goes on.
   void configure(const PipelineConfig& cfg, MissionTracker& mission);
   // One sample with valid metrics, in any phase but Paused. stepDt: time since the previous
-  // one. inMission: pushed while the mission is Active (after mission.addTime()).
-  void add(MissionTracker& mission, const FlightMetrics& m, double stepDt, bool inMission);
+  // one. inMission: pushed while the mission is Active (after mission.addTime()). filter: the
+  // live G path's windows and measured noise (sets the pre-smoothing).
+  void add(MissionTracker& mission, const FlightMetrics& m, double stepDt, bool inMission,
+           const FilterState& filter = {});
+  double preSmoothingS() const { return filter_.preSmoothing(); }
+  static constexpr double kPreReleaseS = 1.0;
   // A mission opened: its episodes start afresh (an episode running into it counts once
   // it is confirmed anew).
   void missionStarted() { ++epoch_; }
@@ -54,12 +60,14 @@ class MissionFeed {
     bool inMission = false;
   };
   void drain(MissionTracker& mission);
+  void followNoise(const FilterState& filter, double stepDt);
 
   SustainedFilter filter_;
   RingQueue<Pending> pending_;  // payloads of the samples inside the filter, same order
   HighGTimer highG_;
   double streamT_ = 0.0;       // filter time: sum of stepDt over the samples pushed
   double confirmFromT_ = 0.0;  // outputs before this filter time are unconfirmed
+  double narrowerForS_ = 0.0;  // how long the noise has asked for less pre-smoothing
   bool restarted_ = true;      // the next sample starts a new stream
   std::uint32_t epoch_ = 0;    // missions started
   std::uint32_t timerEpoch_ = 0;  // mission the episode timer belongs to

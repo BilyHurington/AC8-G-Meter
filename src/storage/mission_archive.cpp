@@ -121,7 +121,7 @@ LoadedMission loadMission(const MissionIndexEntry& entry) {
     return out;
   }
   // Files from before the N-second averages were stored (schema 1).
-  if (report->windowed.empty()) report->windowed = computeWindowedAverages(report->trace);
+  if (report->windowed.empty()) report->windowed = computeWindowedAverages(report->trace, report->stats.durationS);
   out.entry = e;
   out.report = std::move(report);
   return out;

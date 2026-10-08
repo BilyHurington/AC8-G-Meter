@@ -86,7 +86,7 @@ TEST_CASE("metric lines are aligned HUD rows") {
   CHECK(formatMetricLine(MetricId::SustainedMaxG, s) == "SUS G  +6.8");
   CHECK(formatMetricLine(MetricId::OnsetRate, s) == "ONSET  +4.1 G/s");
   CHECK(formatMetricLine(MetricId::Aoa, s) == "AOA    12.4\xC2\xB0");
-  CHECK(formatMetricLine(MetricId::SustainedHighG, s) == "HI-G   3.2 s");
+  CHECK(formatMetricLine(MetricId::HighGTimer, s) == "HI-G   3.2 s");
   CHECK(formatMetricLine(MetricId::Sideslip, s) == "BETA   -0.8\xC2\xB0");
   CHECK(formatMetricLine(MetricId::Speed, s) == "SPD    850 km/h");
 

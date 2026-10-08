@@ -16,9 +16,10 @@
 //                     presence marks a complete pair.
 //
 // Schema history (older files load; missing values stay absent):
-//   1  no sustained statistics (stats.max_g etc. were the filtered values; they load as peak
-//      values with hasSustainedData = false), no g_sustained column, no average_g_windows
-//      (recomputed from the trace by the archive), no min_excursion_s.
+//   1  one kind of G extreme, from the open/close-filtered G (stats.max_g etc.): it loads as
+//      the sustained extremes, with no peak value (MissionReport::legacyFilteredG; the trace's
+//      g_mean / g_min / g_max are that filtered G too); no g_sustained column, no
+//      average_g_windows (recomputed from the trace by the archive), no min_excursion_s.
 //   2  current.
 #include <cstdint>
 #include <cstddef>

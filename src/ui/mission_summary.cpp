@@ -35,7 +35,9 @@ std::string gValue(double g) { return formatNumber(g, 1, true) + " G"; }
 // "Sustained G (>= 0.20 s)": W of the report (0: the filter was off, sustained = peak).
 std::string sustainedLabel(const MissionReport& report, const char* what) {
   char buf[64];
-  if (report.minExcursionS > 0.0)
+  if (report.legacyFilteredG)  // schema-1 archive: its (only) extremes were the filtered G
+    std::snprintf(buf, sizeof buf, "Filtered %s (v1 file)", what);
+  else if (report.minExcursionS > 0.0)
     std::snprintf(buf, sizeof buf, "Sustained %s (>=%.1f s)", what, report.minExcursionS);  // fonts lack U+2265
   else
     std::snprintf(buf, sizeof buf, "Sustained %s", what);
@@ -48,7 +50,9 @@ void statsTable(const MissionReport& report) {
   ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed);  // fits the longest label
   row("Flight time", formatClock(st.durationS));
   // Peak: every reading as the live G showed it. Sustained: excursions shorter than W removed.
-  if (st.hasGData) {
+  // (Schema-1 archives recorded no peak: "--".)
+  const bool peak = st.hasGData && !report.legacyFilteredG;
+  if (peak) {
     row("Peak G", gValue(st.maxG), at(st.maxGAtS));
   } else {
     row("Peak G", "--");
@@ -57,7 +61,7 @@ void statsTable(const MissionReport& report) {
     row(sustainedLabel(report, "G").c_str(), gValue(st.sustainedMaxG), at(st.sustainedMaxGAtS));
   else
     row(sustainedLabel(report, "G").c_str(), "--");
-  if (st.hasGData) {
+  if (peak) {
     row("Peak min G", gValue(st.minG), at(st.minGAtS));
   } else {
     row("Peak min G", "--");
@@ -165,7 +169,11 @@ SummaryResult drawMissionSummary(const MissionReport& report, const SummaryConte
     // The chart takes ~40% of the window; statistics and histogram share the row below.
     // (38%: at the default size everything down to the buttons fits without scrolling.)
     ImGui::SeparatorText(report.gMode == GMode::Total ? "G over time (total |n|)" : "G over time (Nz)");
-    chart.draw(report, ImVec2(0.0f, std::max(fs * 11.0f, ImGui::GetWindowHeight() * 0.38f)));
+    // The chart's space is reserved first and the chart drawn after the tables, so the
+    // average row hovered in this frame is highlighted in this frame (not one frame late).
+    const float plotH = std::max(fs * 11.0f, ImGui::GetWindowHeight() * 0.38f);
+    const ImVec2 chartPos = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, GChart::height(plotH)));
     if (ImGui::BeginTable("##ft_summary_cols", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("stats", ImGuiTableColumnFlags_WidthStretch, 1.0f);
       ImGui::TableSetupColumn("averages", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -177,6 +185,10 @@ SummaryResult drawMissionSummary(const MissionReport& report, const SummaryConte
       averagesTable(report, chart);
       ImGui::EndTable();
     }
+    const ImVec2 below = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(chartPos);
+    chart.draw(report, ImVec2(0.0f, plotH));
+    ImGui::SetCursorScreenPos(below);
   }
 
   ImGui::SeparatorText("Data quality");

@@ -205,7 +205,10 @@ void SettingsMenu::metricsSection(Settings& s, const FilterState& filter, Settin
              "than it (collisions, physics jolts) are left out, so it can be lower than the peak "
              "even in a real manoeuvre (a pull that only touches 9 G reads less). High-G episodes "
              "use the sustained G. It is ready up to about twice this time after the live G. "
-             "0 = sustained equals peak.");
+             "On noisy data it smooths more (adapting to the measured noise): then bumps shorter "
+             "than about half this time are still removed, longer ones partly kept, and the "
+             "sustained extremes can read about 0.1 G (up to ~0.35 G with very noisy data at "
+             "60 fps) beyond the level really held. 0 = sustained equals peak.");
   if (pipe) {
     s.clamp();  // keeps exit < enter when enter is lowered
     r.changed = r.pipelineChanged = true;
@@ -239,9 +242,16 @@ void SettingsMenu::missionSection(Settings& s, bool hasLastReport, const Mission
 
 void SettingsMenu::keepMissionsInput(Settings& s, const MissionArchiveInfo& archive, SettingsMenuResult& r) {
   int& limit = s.history.maxSavedMissions;
-  // Applied when typing ends (Enter / focus lost) or on a -/+ click (Ctrl: steps of 10).
   int value = pendingKeep_ >= 0 ? pendingKeep_ : limit;
-  if (ImGui::InputInt("Keep missions", &value, 1, 10) && pendingKeep_ < 0) {
+  // Typed digits must not count one by one ("30" over "50" would first ask to delete down to
+  // 3). With ImGuiItemFlags_LiveEditOnInputScalar off (ImGui >= 1.92.9 default, pinned here)
+  // InputInt writes the typed value and returns true only when the edit ends (Enter, Tab,
+  // focus lost): the IsItemDeactivatedAfterEdit() moment. The -/+ step buttons write and
+  // return true at once (Ctrl: steps of 10). Covered by a headless test in imgui_smoke_tests.
+  ImGui::PushItemFlag(ImGuiItemFlags_LiveEditOnInputScalar, false);
+  const bool edited = ImGui::InputInt("Keep missions", &value, 1, 10);
+  ImGui::PopItemFlag();
+  if (edited && pendingKeep_ < 0) {
     value = value < 0 ? 0 : (value > 1000 ? 1000 : value);
     const int deletes = archive.counting ? 0 : missionsDeletedByNewLimit(limit, value, archive.savedMissions);
     if (deletes > 0) {

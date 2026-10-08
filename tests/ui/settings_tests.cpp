@@ -65,6 +65,9 @@ TEST_CASE("default visible metrics are set by id") {
 TEST_CASE("metric keys are unique and stable") {
   CHECK(std::string(metricKey(MetricId::CurrentG)) == "current_g");
   CHECK(std::string(metricKey(MetricId::Speed)) == "speed");
+  // The HUD's live high-G timer was renamed from SustainedHighG; settings files keep the key.
+  CHECK(std::string(metricKey(MetricId::HighGTimer)) == "sustained_high_g");
+  CHECK(std::string(metricLabel(MetricId::HighGTimer)) == "Current high-G time");
   for (int a = 0; a < kMetricCount; ++a)
     for (int b = a + 1; b < kMetricCount; ++b)
       CHECK(std::string(metricKey(static_cast<MetricId>(a))) != metricKey(static_cast<MetricId>(b)));

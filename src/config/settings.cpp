@@ -15,7 +15,7 @@ const char* metricKey(MetricId id) {
     case MetricId::SustainedMaxG: return "sustained_max_g";
     case MetricId::OnsetRate: return "onset_rate";
     case MetricId::Aoa: return "aoa";
-    case MetricId::SustainedHighG: return "sustained_high_g";
+    case MetricId::HighGTimer: return "sustained_high_g";  // pre-rename key, kept for settings files
     case MetricId::Sideslip: return "sideslip";
     case MetricId::Speed: return "speed";
     case MetricId::Count: break;
@@ -31,7 +31,7 @@ const char* metricLabel(MetricId id) {
     case MetricId::SustainedMaxG: return "Sustained max G (mission)";
     case MetricId::OnsetRate: return "G onset rate (G/s)";
     case MetricId::Aoa: return "Angle of attack";
-    case MetricId::SustainedHighG: return "Sustained high-G time";
+    case MetricId::HighGTimer: return "Current high-G time";
     case MetricId::Sideslip: return "Sideslip angle";
     case MetricId::Speed: return "Speed";
     case MetricId::Count: break;

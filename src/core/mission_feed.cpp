@@ -11,13 +11,15 @@ void MissionFeed::configure(const PipelineConfig& cfg, MissionTracker& mission) 
   }
 }
 
-void MissionFeed::add(MissionTracker& mission, const FlightMetrics& m, double stepDt, bool inMission) {
+void MissionFeed::add(MissionTracker& mission, const FlightMetrics& m, double stepDt, bool inMission,
+                      const FilterState& filter) {
   const bool filtered = filter_.width() > 0.0;
+  if (filtered) followNoise(filter, stepDt);
   streamT_ += stepDt;
   if (restarted_) {
     restarted_ = false;
-    // The filter's look-back (W, and W / 8 of pre-smoothing) must lie after the restart.
-    confirmFromT_ = streamT_ + 1.125 * filter_.width();
+    // The filter's look-back (W, and up to W / 4 of pre-smoothing) must lie after the restart.
+    confirmFromT_ = streamT_ + (1.0 + 0.5 * SustainedFilter::kMaxPreRatio) * filter_.width();
   }
   Pending p;
   p.inMission = inMission && mission.open();
@@ -29,6 +31,23 @@ void MissionFeed::add(MissionTracker& mission, const FlightMetrics& m, double st
   pending_.push_back(p);
   filter_.push(streamT_, filtered ? m.gRaw : m.g);
   drain(mission);
+}
+
+void MissionFeed::followNoise(const FilterState& filter, double stepDt) {
+  const double want = sustainedPreSmoothingS(filter_.width(), filter);
+  const double have = filter_.preSmoothing();
+  if (want > have) {  // more noise: at once
+    filter_.setPreSmoothing(want);
+    narrowerForS_ = 0.0;
+  } else if (want < have - 1e-9) {  // less: once it has lasted (the estimate fluctuates)
+    narrowerForS_ += stepDt;
+    if (narrowerForS_ >= kPreReleaseS) {
+      filter_.setPreSmoothing(want);
+      narrowerForS_ = 0.0;
+    }
+  } else {
+    narrowerForS_ = 0.0;
+  }
 }
 
 void MissionFeed::drain(MissionTracker& mission) {

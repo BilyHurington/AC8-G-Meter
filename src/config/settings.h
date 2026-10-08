@@ -21,7 +21,7 @@ enum class MetricId : std::uint8_t {
   SustainedMaxG,  // hidden by default
   OnsetRate,
   Aoa,
-  SustainedHighG,
+  HighGTimer,  // live high-G episode timer (HUD "HI-G"); JSON key "sustained_high_g" kept
   Sideslip,
   Speed,
   Count

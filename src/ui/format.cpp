@@ -52,7 +52,7 @@ std::string formatMetricLine(MetricId id, const MetricsSnapshot& s) {
     case MetricId::Aoa:
       return line("AOA", m.valid && m.aoaValid ? formatNumber(m.aoaDeg, 1, false, 5) + kDegreeSign
                                                : padLeft(na, 5));
-    case MetricId::SustainedHighG:
+    case MetricId::HighGTimer:
       return line("HI-G", m.valid ? formatNumber(m.highGDurationS, 1, false, 4) + " s" : padLeft(na, 4));
     case MetricId::Sideslip:
       return line("BETA", m.valid && m.aoaValid
