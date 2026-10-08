@@ -2,6 +2,7 @@
 // Single entry point the host calls every frame, between ImGui::NewFrame() and
 // ImGui::Render(). Hosts: apps/macos_proto (SDL3 + Metal) now, the UE4SS mod's
 // DX11/DX12 Present hook later. Contains no platform or graphics-API code.
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -32,15 +33,16 @@ class TelemetryUi {
   // mouse is over / interacting with the mission summary. Hosts forward input to the game
   // only when this is false. Normal overlay mode never captures input, and the auto-shown
   // summary does not block the game (e.g. the results screen) unless the mouse is on it.
-  // Reads ImGui's io.WantCaptureMouse, so call it while the ImGui context is current.
-  bool wantsInput() const;
+  // Thread-safe: the value is computed at the end of frame() (render thread) and cached,
+  // so an input hook (WndProc) on another thread can query it without touching ImGui.
+  bool wantsInput() const { return wantsInput_.load(std::memory_order_relaxed); }
 
   bool menuOpen() const { return menuOpen_; }
-  void setMenuOpen(bool open) { menuOpen_ = open; }
+  void setMenuOpen(bool open) { menuOpen_ = open; refreshWantsInput(); }
   bool editMode() const { return editMode_; }
-  void setEditMode(bool on) { editMode_ = on; }
+  void setEditMode(bool on) { editMode_ = on; refreshWantsInput(); }
   bool summaryOpen() const { return summaryOpen_; }
-  void showSummary(bool show) { summaryOpen_ = show; }
+  void showSummary(bool show) { summaryOpen_ = show; refreshWantsInput(); }
 
   // Invoked after any setting that affects the pipeline changes (apply via toPipelineConfig).
   std::function<void(const Settings&)> onSettingsChanged;
@@ -55,6 +57,13 @@ class TelemetryUi {
   bool menuOpen_ = false;
   bool editMode_ = false;
   bool summaryOpen_ = false;
+  bool imguiWantsMouse_ = false;  // io.WantCaptureMouse at the end of the last frame()
+  std::atomic<bool> wantsInput_{false};
+
+  void refreshWantsInput() {
+    wantsInput_.store(menuOpen_ || editMode_ || (summaryOpen_ && imguiWantsMouse_),
+                      std::memory_order_relaxed);
+  }
 };
 
 }  // namespace ft

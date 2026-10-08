@@ -19,9 +19,14 @@ class MissionTracker {
   void countAccepted() { ++stats_.acceptedSamples; }
   void countRejected() { ++stats_.rejectedSamples; }
 
-  // Adds one valid sample. dtS is the time since the previous accepted sample; mission
-  // time (and every "...AtS") is the sum of these, so pauses and gaps are excluded.
-  // highGEntered: a high-G episode started on this sample.
+  // Advances mission time by the game time since the previous accepted sample. Called for
+  // every accepted Active sample, valid metrics or not, so estimator warm-up after a reset
+  // and held (implausible) samples never shorten the mission. Pauses are excluded because
+  // game time stops while paused.
+  void addTime(double dtS);
+
+  // Adds one sample with valid metrics, at the current mission time (call addTime first).
+  // dtS weights the histogram and high-G totals. highGEntered: an episode started here.
   void add(const FlightMetrics& m, double dtS, bool highGEntered);
 
   // Closes the mission. Live stats stay readable until the next start().
@@ -43,7 +48,6 @@ class MissionTracker {
   static constexpr std::size_t kMaxTimelinePoints = 1'000'000;
 
   MissionStats stats_;
-  bool hasG_ = false;  // G extremes initialised since start() / resetGStats()
   std::vector<float> timeline_;
   double timelineHz_ = 10.0;
   double timelineStartS_ = 0.0;

@@ -46,10 +46,6 @@ void TelemetryUi::addLayer(std::unique_ptr<IOverlayLayer> layer) {
   if (layer) impl_->layers.push_back(std::move(layer));
 }
 
-bool TelemetryUi::wantsInput() const {
-  return menuOpen_ || editMode_ || (summaryOpen_ && ImGui::GetIO().WantCaptureMouse);
-}
-
 void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float screenH, double now) {
   Impl& d = *impl_;
   Settings& settings = store_.settings();
@@ -95,6 +91,9 @@ void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float sc
   if (changed) store_.markDirty(now);
   if (pipelineChanged && onSettingsChanged) onSettingsChanged(store_.settings());
   store_.update(now);
+
+  imguiWantsMouse_ = ImGui::GetIO().WantCaptureMouse;
+  refreshWantsInput();
 }
 
 }  // namespace ft

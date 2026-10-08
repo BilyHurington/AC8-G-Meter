@@ -12,7 +12,6 @@ void MissionTracker::start(double timelineHz) {
 
 void MissionTracker::clearStats() {
   stats_ = {};
-  hasG_ = false;
   timeline_.clear();
   timelineStartS_ = 0.0;
 }
@@ -26,19 +25,21 @@ void MissionTracker::resetGStats() {
   stats_.maxSpeed = old.maxSpeed;
   stats_.acceptedSamples = old.acceptedSamples;
   stats_.rejectedSamples = old.rejectedSamples;
-  hasG_ = false;
   timeline_.clear();
   timelineStartS_ = old.durationS;
 }
 
+void MissionTracker::addTime(double dtS) {
+  stats_.durationS += dtS;
+  stats_.hasData = true;
+}
+
 void MissionTracker::add(const FlightMetrics& m, double dtS, bool highGEntered) {
   MissionStats& s = stats_;
-  s.durationS += dtS;
   const double now = s.durationS;
 
-  s.hasData = true;
-  if (!hasG_) {
-    hasG_ = true;
+  if (!s.hasGData) {
+    s.hasGData = true;
     s.maxG = s.minG = m.g;
     s.maxGAtS = s.minGAtS = now;
     s.maxOnset = s.minOnset = m.onsetRate;

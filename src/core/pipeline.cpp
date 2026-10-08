@@ -220,12 +220,17 @@ struct TelemetryPipeline::Impl {
       return;
     }
 
+    // Mission time skips pauses and gaps (unknown what happened in between) but counts
+    // everything else, including estimator warm-up and held implausible samples.
+    bool countTime = hasLast;
     if (resetPending) {
       resetEstimators();
+      countTime = false;
     } else if (hasLast) {
       if (dt > cfg.maxGapS || clockRestart) {
         resetEstimators();
         ++quality.resetsGap;
+        countTime = false;
       } else if (isTeleport(s, dt)) {
         discontinuity();
         ++quality.resetsTeleport;
@@ -294,6 +299,7 @@ struct TelemetryPipeline::Impl {
     if (!implausible) ++quality.accepted;
     if (phase == MissionPhase::Active) {
       if (!implausible) mission.countAccepted();
+      mission.addTime(countTime ? stepDt : 0.0);
       if (m.valid) mission.add(m, stepDt, highGStep.entered);
     }
     if (m.valid) recordRecent(m.g, stepDt);

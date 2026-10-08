@@ -85,14 +85,16 @@ TEST_CASE("mission flow: start, pause excluded, one report, abort, ids") {
   const MissionReport& r = *s.lastReport;
   CHECK(r.id == 1);
   CHECK_FALSE(r.aborted);
-  // 3 s + 2 s Active, minus a few invalid samples right after the resume.
-  CHECK(r.stats.durationS == Approx(5.0).epsilon(0.03));
+  // 3 s + 2 s Active; the pause (and the resume step spanning it) is excluded.
+  CHECK(r.stats.durationS == Approx(5.0).epsilon(0.01));
   CHECK(r.stats.durationS < 5.0 + 1e-9);
   CHECK(r.stats.maxG == Approx(2.0).epsilon(1e-3));
   CHECK(r.stats.maxGAtS <= r.stats.durationS);
   const double binSum = std::accumulate(r.stats.timeInGBinS.begin(), r.stats.timeInGBinS.end(), 0.0);
-  CHECK(binSum == Approx(r.stats.durationS));
-  CHECK(r.stats.timeInGBinS[gBinIndex(2.0)] == Approx(r.stats.durationS));
+  // The histogram only covers valid samples: duration minus a few warm-up frames.
+  CHECK(binSum <= r.stats.durationS + 1e-9);
+  CHECK(binSum > r.stats.durationS - 0.2);
+  CHECK(r.stats.timeInGBinS[gBinIndex(2.0)] == Approx(binSum));
   CHECK(r.timelineHz == 10.0);
   CHECK(std::abs(static_cast<double>(r.gTimeline.size()) - r.stats.durationS * 10.0) <= 2.0);
   CHECK(r.gTimeline.back() == Approx(2.0).epsilon(1e-3));
@@ -207,7 +209,10 @@ TEST_CASE("changing the G mode mid-mission restarts the G statistics only") {
   cfg.gMode = GMode::Total;
   p.setConfig(cfg);
   CHECK(p.snapshot().recent.count == 0);
+  CHECK_FALSE(p.snapshot().mission.hasGData);  // UI shows "--", not a bogus 0.0
+  CHECK(p.snapshot().mission.hasData);
   t = fly(p, inverted, t, 4.0);
+  CHECK(p.snapshot().mission.hasGData);
   fly(p, inverted, t, 4.5, phase(MissionPhase::Ended));
 
   REQUIRE(p.snapshot().lastReport);

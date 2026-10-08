@@ -33,10 +33,14 @@ void statsTable(const MissionStats& st) {
   if (!ImGui::BeginTable("##ft_summary_stats", 2, ImGuiTableFlags_SizingFixedFit)) return;
   ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9.0f);
   row("Flight time", formatClock(st.durationS));
-  row("Max G", formatNumber(st.maxG, 1, true) + " G", at(st.maxGAtS));
-  row("Min G", formatNumber(st.minG, 1, true) + " G", at(st.minGAtS));
-  row("Max onset", formatNumber(st.maxOnset, 1, true) + " G/s");
-  row("Max unload", formatNumber(st.minOnset, 1, true) + " G/s");
+  if (st.hasGData) {
+    row("Max G", formatNumber(st.maxG, 1, true) + " G", at(st.maxGAtS));
+    row("Min G", formatNumber(st.minG, 1, true) + " G", at(st.minGAtS));
+    row("Max onset", formatNumber(st.maxOnset, 1, true) + " G/s");
+    row("Max unload", formatNumber(st.minOnset, 1, true) + " G/s");
+  } else {
+    row("Max / min G", "--");
+  }
   row("Max AoA", formatNumber(st.maxAoaDeg, 1, false) + kDegreeSign);
   row("Max speed", formatSpeedKmh(st.maxSpeed));
   row("Longest high-G", formatNumber(st.longestHighGS, 1, false) + " s");

@@ -43,6 +43,7 @@ int gBinIndex(double g);
 // Aggregates over one mission. Times ("...AtS") are seconds since mission start.
 struct MissionStats {
   bool hasData = false;
+  bool hasGData = false;           // G extremes / onset / histogram hold at least one valid value
   double durationS = 0.0;          // flight time while Active (pauses excluded)
   double maxG = 0.0, maxGAtS = 0.0;
   double minG = 0.0, minGAtS = 0.0;

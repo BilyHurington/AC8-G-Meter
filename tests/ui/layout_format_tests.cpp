@@ -73,6 +73,7 @@ TEST_CASE("metric lines are aligned HUD rows") {
   s.current.speed = 850.0 / 3.6;
   s.current.highGDurationS = 3.2;
   s.mission.hasData = true;
+  s.mission.hasGData = true;
   s.mission.maxG = 7.9;
   s.mission.minG = -1.2;
 

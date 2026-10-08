@@ -41,9 +41,9 @@ std::string formatMetricLine(MetricId id, const MetricsSnapshot& s) {
     case MetricId::CurrentG:
       return line("G", m.valid ? formatNumber(m.g, 1, true, 5) : padLeft(na, 5));
     case MetricId::MaxG:
-      return line("MAX G", ms.hasData ? formatNumber(ms.maxG, 1, true, 5) : padLeft(na, 5));
+      return line("MAX G", ms.hasGData ? formatNumber(ms.maxG, 1, true, 5) : padLeft(na, 5));
     case MetricId::MinG:
-      return line("MIN G", ms.hasData ? formatNumber(ms.minG, 1, true, 5) : padLeft(na, 5));
+      return line("MIN G", ms.hasGData ? formatNumber(ms.minG, 1, true, 5) : padLeft(na, 5));
     case MetricId::OnsetRate:
       return line("ONSET", m.valid ? formatNumber(m.onsetRate, 1, true, 5) + " G/s" : padLeft(na, 5));
     case MetricId::Aoa:

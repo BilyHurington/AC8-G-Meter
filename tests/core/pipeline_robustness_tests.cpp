@@ -207,9 +207,10 @@ TEST_CASE("implausible G holds the last values but keeps mission time") {
   CHECK(validThroughout);              // held values, never "--"
   CHECK(maxShown < 15.0);
   CHECK(s.mission.maxG == Approx(maxShown));
-  CHECK(s.mission.durationS == Approx(5.0).epsilon(0.02));  // only warm-up samples missing
+  CHECK(s.mission.durationS == Approx(5.0).epsilon(0.005));
   const double binSum = std::accumulate(s.mission.timeInGBinS.begin(), s.mission.timeInGBinS.end(), 0.0);
-  CHECK(binSum == Approx(s.mission.durationS));
+  CHECK(binSum <= s.mission.durationS + 1e-9);  // warm-up frames are not in the histogram
+  CHECK(binSum > s.mission.durationS - 0.2);
   CHECK(s.mission.totalHighGS > 1.2);  // the held (high) value keeps the high-G clock running
 }
 
@@ -267,4 +268,20 @@ TEST_CASE("position-only teleport is measured against the fit prediction") {
   CHECK(s.quality.resetsTeleport == 1);
   CHECK(s.quality.rejectedImplausible == 0);
   CHECK(s.mission.maxG == Approx(1.0).epsilon(1e-6));
+}
+
+TEST_CASE("a sudden jump to implausible G does not shorten the mission") {
+  // Level flight, then the trajectory switches instantly to a ~16 G turn: the estimators
+  // treat it as a discontinuity, but every second flown still counts as mission time.
+  TelemetryPipeline p;
+  RecordingConsumer c;
+  p.addConsumer(&c);
+  double t = fly(p, levelTurn(60.0), 0.0, 2.0);
+  t = fly(p, levelTurn(86.5), t, 4.0);
+  t = fly(p, levelTurn(60.0), t, 6.0);
+  const MissionStats s = p.snapshot().mission;
+  CHECK(s.durationS == Approx(6.0).epsilon(0.005));
+  CHECK(s.maxG < p.config().plausibleGLimit);
+  CHECK(c.last.valid);
+  CHECK(c.last.g == Approx(2.0).epsilon(1e-3));
 }
