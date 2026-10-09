@@ -44,3 +44,16 @@ if(FT_BUILD_MOD)
   ft_warnings(ft_mod_e2e_tests)
   add_test(NAME ft_mod_e2e_tests COMMAND ft_mod_e2e_tests)
 endif()
+
+# Installer: install / update / uninstall logic on fake game folders, and the real exe.
+if(FT_BUILD_MOD)
+  add_executable(ft_installer_tests installer/installer_tests.cpp)
+  target_link_libraries(ft_installer_tests PRIVATE ft_installer_core doctest::doctest)
+  target_compile_definitions(ft_installer_tests PRIVATE
+    FT_TEST_TMP_DIR="${CMAKE_BINARY_DIR}/test_tmp"
+    FT_INSTALLER_EXE="$<TARGET_FILE:ac8gmeter_installer>"
+    FT_UE4SS_PAYLOAD_DIR="${CMAKE_SOURCE_DIR}/third_party/ue4ss/payload")
+  add_dependencies(ft_installer_tests ac8gmeter_installer)
+  ft_warnings(ft_installer_tests)
+  add_test(NAME ft_installer_tests COMMAND ft_installer_tests)
+endif()

@@ -33,14 +33,18 @@ ft_warnings(ft_mod_runtime)
 add_subdirectory(dll)
 
 # Mod folder ready to copy into Game\Binaries\Win64\ue4ss\Mods\: build/mod_package/AC8GMeter
-set(FT_MOD_PACKAGE_DIR ${CMAKE_BINARY_DIR}/mod_package/AC8GMeter)
+set(FT_MOD_PACKAGE_DIR ${CMAKE_BINARY_DIR}/mod_package/AC8GMeter CACHE INTERNAL "")  # also used by installer/
 file(GLOB _mod_lua CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/lua/Scripts/*.lua)
 add_custom_target(ac8gmeter_package ALL
+  COMMAND ${CMAKE_COMMAND} -E remove_directory ${FT_MOD_PACKAGE_DIR}  # no stale files from earlier builds
   COMMAND ${CMAKE_COMMAND} -E make_directory ${FT_MOD_PACKAGE_DIR}/Scripts ${FT_MOD_PACKAGE_DIR}/assets/fonts
   COMMAND ${CMAKE_COMMAND} -E touch ${FT_MOD_PACKAGE_DIR}/enabled.txt
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_mod_lua} $<TARGET_FILE:ac8gmeter> ${FT_MOD_PACKAGE_DIR}/Scripts/
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/package/README.txt
           ${CMAKE_CURRENT_SOURCE_DIR}/package/THIRD_PARTY_NOTICES.txt ${FT_MOD_PACKAGE_DIR}/
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/ue4ss/LICENSE ${FT_MOD_PACKAGE_DIR}/UE4SS_LICENSE.txt
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/ue4ss/notices/THIRD_PARTY_LICENSES.txt
+          ${FT_MOD_PACKAGE_DIR}/UE4SS_THIRD_PARTY_LICENSES.txt
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/fonts/B612Mono-Regular.ttf
           ${CMAKE_SOURCE_DIR}/assets/fonts/OFL.txt ${FT_MOD_PACKAGE_DIR}/assets/fonts/
   DEPENDS ac8gmeter ${_mod_lua}

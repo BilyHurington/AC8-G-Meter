@@ -1,0 +1,2 @@
+# Vendored third-party runtime files are installed byte for byte (their SHA-256 is checked).
+third_party/ue4ss/payload/** -text

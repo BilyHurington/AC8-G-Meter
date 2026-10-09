@@ -1,17 +1,20 @@
-AC8 G-Meter includes or builds on the following third-party software.
+AC8 G-Meter includes or builds on the following third-party software. ac8gmeter.dll is the
+mod; AC8GMeter-Installer.exe is its installer, which also carries all files listed here.
 
 Dear ImGui (statically linked into ac8gmeter.dll)
   https://github.com/ocornut/imgui - MIT License
   Copyright (c) 2014-2026 Omar Cornut
 
-JSON for Modern C++ (statically linked into ac8gmeter.dll)
+JSON for Modern C++ (statically linked into ac8gmeter.dll and AC8GMeter-Installer.exe)
   https://github.com/nlohmann/json - MIT License
   Copyright (c) 2013-2025 Niels Lohmann
 
-RE-UE4SS (not included; ac8gmeter.dll calls functions exported by the user's UE4SS.dll,
-declared in its own headers after RE-UE4SS's RC::LuaMadeSimple::Lua)
-  https://github.com/UE4SS-RE/RE-UE4SS - MIT License
+RE-UE4SS v3.0.1-1152-ge3ba1016 (UE4SS.dll, dwmapi.dll and their files; installed unmodified by
+AC8GMeter-Installer.exe when the game has no UE4SS. ac8gmeter.dll calls functions UE4SS.dll
+exports, declared in its own headers after RE-UE4SS's RC::LuaMadeSimple::Lua)
+  https://github.com/UE4SS-RE/RE-UE4SS - MIT License (UE4SS_LICENSE.txt)
   Copyright (c) 2022 Narknon
+  Components built into UE4SS.dll and their licenses: UE4SS_THIRD_PARTY_LICENSES.txt
 
 B612 Mono font (assets\fonts)
   https://github.com/polarsys/b612 - SIL Open Font License 1.1 (assets\fonts\OFL.txt)

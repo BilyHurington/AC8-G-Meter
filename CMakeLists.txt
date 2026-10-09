@@ -18,6 +18,9 @@ option(FT_BUILD_MOD "Build the in-game UE4SS mod and its overlay test harness (W
 # Sources are UTF-8; without this MSVC reads them in the system code page (e.g. 936).
 if(MSVC)
   add_compile_options(/utf-8)
+  # Static C++ runtime: the mod DLL and the installer must not depend on the player having
+  # the matching Visual C++ Redistributable.
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 include(cmake/Deps.cmake)
@@ -64,6 +67,7 @@ endif()
 if(FT_BUILD_MOD)
   add_subdirectory(mod)
   add_subdirectory(apps/overlay_harness)
+  add_subdirectory(installer)
 endif()
 
 if(FT_BUILD_TESTS)

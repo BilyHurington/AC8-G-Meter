@@ -125,7 +125,15 @@ Windows（Win32 + Direct3D 12，与游戏内叠加层使用相同的 ImGui 后�
 - **Lua 脚本**（`mod/lua/Scripts/`）：每个游戏帧在游戏线程读取玩家飞机（`ALivePlayerPlane`）的位置、速度、三轴朝向、游戏时间和暂停状态，打包成一组数值交给 DLL。协议见 `mod/flight/lua_frame.h`。
 - **原生 DLL `ac8gmeter.dll`**：通过 UE4SS 导出的 Lua 封装（`RC::LuaMadeSimple::Lua` 的 6 个函数，见 `mod/dll/ue4ss_lua.def`）读取这些数值，用与原型相同的管线计算 G，并通过 DXGI Present Hook 把叠加层画进游戏的 DX12 交换链。不需要编译 UE4SS；只依赖这 6 个导出函数及其行为，已核对 AC8 社区使用的 UE4SS 版本（03dbd5c0、e3ba1016、6eb3d9bc），其他版本在日志中提示，缺少导出时 Mod 不启动。
 
-构建后，`build/mod_package/AC8GMeter/` 就是完整的 Mod 文件夹，复制到游戏的 `Game\Binaries\Win64\ue4ss\Mods\` 即可。安装 UE4SS 和离线启动方法见该文件夹中的 `README.txt`。若游戏不是离线启动（未设置 `EOS_USE_ANTICHEATCLIENTNULL=1`），Mod 不会启动。
+**安装：** 构建后得到 `build/AC8GMeter-Installer.exe`（单个文件，约 11 MB）。把它放到游戏根目录（Steam 的 `ACE COMBAT 8` 文件夹，里面有 `Game` 和 `EasyAntiCheat`）双击运行：
+
+- 游戏里还没有 UE4SS 时，安装随附的 **UE4SS v3.0.1 (e3ba1016)**，也就是 AC8 Tweaks、Per-View FOV、Mouse-Aim 等 Mod 使用的版本，目录结构与 Mouse-Aim 相同；已有 UE4SS 时直接使用，不做改动，避免多个 Mod 互相冲突。
+- 把 Mod 装到 `Game\Binaries\Win64\<UE4SS 文件夹>\Mods\AC8GMeter`。Mod 文件夹里的 `enabled.txt` 让 UE4SS 自动加载它，不会改动各 Mod 共用的 `mods.txt`。现有 UE4SS 处于禁用状态，或 `HookEngineTick = 0` 时会给出提示；设置了自定义 Mods 文件夹时拒绝安装。
+- 没有 `EasyAntiCheat\AC8_Offline.json` 时生成它（游戏的 `Settings.json` 加上 `"allow_null_client": "true"`），并把 Steam 启动选项复制到剪贴板。
+
+再次运行可以选择**更新/修复**（保留设置、任务记录和改过的 `config.lua`）或**卸载**（可选同时删除任务记录）。安装内容记录在 Mod 文件夹的 `install.json`，卸载只删除这些；UE4SS 只有在是本程序装的、且没有其他 Mod 在用时才会删除。若游戏不是离线启动（未设置 `EOS_USE_ANTICHEATCLIENTNULL=1`），Mod 不会启动。命令行用法：`--install` / `--uninstall [--delete-data]` `[--game-dir <dir>] [--report <file>]`，不显示界面，用于自动化测试；退出码 0 成功、1 失败、2 不是游戏目录或被阻止、3 游戏正在运行、4 参数错误。界面底部的“第三方软件许可”链接会打开全部许可文本。
+
+随附的 UE4SS 放在 `third_party/ue4ss/`，附有来源、SHA-256（构建时校验）、MIT 许可证和其内含第三方组件的许可清单；这些许可文件也会装进 Mod 文件夹。安装包内容用 Windows 自带的压缩 API（LZMS）压缩后嵌入 exe。Mod DLL 和安装程序静态链接 C++ 运行库，不依赖 VC++ 运行库。手动安装：把 `build/mod_package/AC8GMeter/` 复制到 UE4SS 的 `Mods` 文件夹。
 
 任务判定（第一版，待在游戏中找到真正的任务流程信号后改进）：玩家驾驶飞机即视为任务进行中；游戏暂停时统计暂停；飞机消失超过 3 秒（结算、菜单、读盘）即视为任务结束，弹出任务总结。中途重生不会结束任务。已知局限：中途退出任务也按“完成”记录并弹出总结；从暂停菜单重开任务时，若飞机在 3 秒（不含暂停时间）内重新出现，两次尝试会合并为一场；若任务中有超过 3 秒不操控飞机且未暂停的过场，一场任务会被拆成两场。
 
