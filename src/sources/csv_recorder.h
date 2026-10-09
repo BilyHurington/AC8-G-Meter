@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "sources/csv_format.h"
 
@@ -16,12 +17,14 @@ class CsvRecorder {
   void write(const CsvRow& row);
   // Writes "# <text>" (e.g. provenance or a replay_cli "check:" directive).
   void writeComment(std::string_view text);
+  void flush();  // e.g. periodically when the process may end without close()
   void close();
   bool isOpen() const { return file_.is_open(); }
   const std::filesystem::path& path() const { return path_; }
   std::size_t rowsWritten() const { return rows_; }
 
  private:
+  std::vector<char> buffer_;  // stream buffer: writes reach the OS in large blocks; outlives file_
   std::ofstream file_;
   std::filesystem::path path_;
   std::size_t rows_ = 0;

@@ -1,0 +1,11 @@
+; Import library for the Lua stack accessors UE4SS.dll exports (RC::LuaMadeSimple::Lua).
+; Present with identical signatures in the UE4SS builds used with AC8 (03dbd5c0, e3ba1016,
+; 6eb3d9bc). Declared in lua_view.h; linked with /DELAYLOAD:UE4SS.dll.
+LIBRARY UE4SS.dll
+EXPORTS
+    ??0Lua@LuaMadeSimple@RC@@QEAA@PEAUlua_State@@@Z
+    ??1Lua@LuaMadeSimple@RC@@QEAA@XZ
+    ?get_stack_size@Lua@LuaMadeSimple@RC@@QEBAHXZ
+    ?is_number@Lua@LuaMadeSimple@RC@@QEBA_NH@Z
+    ?get_number@Lua@LuaMadeSimple@RC@@QEBANH@Z
+    ?set_number@Lua@LuaMadeSimple@RC@@QEBAXN@Z

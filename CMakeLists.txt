@@ -13,6 +13,7 @@ endif()
 option(FT_BUILD_TESTS "Build unit tests" ON)
 option(FT_BUILD_MACOS_PROTO "Build the SDL3 + Metal standalone prototype (macOS only)" ${APPLE})
 option(FT_BUILD_WIN_PROTO "Build the Win32 + Direct3D 12 standalone prototype (Windows only)" ${WIN32})
+option(FT_BUILD_MOD "Build the in-game UE4SS mod and its overlay test harness (Windows only)" ${WIN32})
 
 # Sources are UTF-8; without this MSVC reads them in the system code page (e.g. 936).
 if(MSVC)
@@ -59,6 +60,10 @@ if(FT_BUILD_MACOS_PROTO)
 endif()
 if(FT_BUILD_WIN_PROTO)
   add_subdirectory(apps/win_proto)
+endif()
+if(FT_BUILD_MOD)
+  add_subdirectory(mod)
+  add_subdirectory(apps/overlay_harness)
 endif()
 
 if(FT_BUILD_TESTS)

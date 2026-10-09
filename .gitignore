@@ -9,3 +9,6 @@ imgui.ini
 # Design / planning documents: kept locally, never committed
 docs/
 platform/windows/README.md
+
+# Real game recordings: kept local until their sharing is decided
+data/real/

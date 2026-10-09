@@ -48,6 +48,7 @@ Written in C++20 with Dear ImGui, as layered libraries (core / config / ui / sto
 | `Ctrl+F8` | 打开/关闭设置菜单 |
 | `Ctrl+F9` | 进入/退出叠加层编辑（拖动）模式 |
 | `Ctrl+F1` | 原型调试面板（仅独立原型） |
+| `Ctrl+F7` | 只读状态探测（仅游戏内 Mod，诊断用） |
 
 在 macOS 上，按 `Cmd` 代替 `Ctrl` 也可以触发。设置菜单里可以修改快捷键。
 
@@ -117,9 +118,22 @@ Windows（Win32 + Direct3D 12，与游戏内叠加层使用相同的 ImGui 后�
 - 对比真值和估计值；
 - 切换虚拟分辨率。
 
+## 游戏内 Mod（UE4SS）
+
+**仅限离线单人游戏。** Mod 由两部分组成：
+
+- **Lua 脚本**（`mod/lua/Scripts/`）：每个游戏帧在游戏线程读取玩家飞机（`ALivePlayerPlane`）的位置、速度、三轴朝向、游戏时间和暂停状态，打包成一组数值交给 DLL。协议见 `mod/flight/lua_frame.h`。
+- **原生 DLL `ac8gmeter.dll`**：通过 UE4SS 导出的 Lua 封装（`RC::LuaMadeSimple::Lua` 的 6 个函数，见 `mod/dll/ue4ss_lua.def`）读取这些数值，用与原型相同的管线计算 G，并通过 DXGI Present Hook 把叠加层画进游戏的 DX12 交换链。不需要编译 UE4SS；只依赖这 6 个导出函数及其行为，已核对 AC8 社区使用的 UE4SS 版本（03dbd5c0、e3ba1016、6eb3d9bc），其他版本在日志中提示，缺少导出时 Mod 不启动。
+
+构建后，`build/mod_package/AC8GMeter/` 就是完整的 Mod 文件夹，复制到游戏的 `Game\Binaries\Win64\ue4ss\Mods\` 即可。安装 UE4SS 和离线启动方法见该文件夹中的 `README.txt`。若游戏不是离线启动（未设置 `EOS_USE_ANTICHEATCLIENTNULL=1`），Mod 不会启动。
+
+任务判定（第一版，待在游戏中找到真正的任务流程信号后改进）：玩家驾驶飞机即视为任务进行中；游戏暂停时统计暂停；飞机消失超过 3 秒（结算、菜单、读盘）即视为任务结束，弹出任务总结。中途重生不会结束任务。已知局限：中途退出任务也按“完成”记录并弹出总结；从暂停菜单重开任务时，若飞机在 3 秒（不含暂停时间）内重新出现，两次尝试会合并为一场；若任务中有超过 3 秒不操控飞机且未暂停的过场，一场任务会被拆成两场。
+
+Mod 文件夹中的文件：`settings.json`、`missions\`（任务历史）、`recordings\`（每场任务的飞行数据 CSV，可用 `replay_cli` 回放；在 `Scripts\config.lua` 中开关）、`ac8gmeter.log`。`Ctrl+F7` 开始/停止只读的状态探测，把飞机、控制器、HUD、游戏模式的相关字段变化写入 `probe-*.txt`，用于寻找任务流程信号。
+
 ## 任务历史文件
 
-默认保存在 `~/Library/Application Support/AC8GMeter/missions/`（Windows：`%APPDATA%\AC8GMeter\missions\`），每场任务两个文件，文件名以保存时刻（UTC）开头，例如 `20261008-140312_m3`（同一秒内重名时追加 `-2`、`-3`…；保留数量按保存时刻、任务编号、追加序号排序，删除最旧的）：
+原型默认保存在 `~/Library/Application Support/AC8GMeter/missions/`（Windows：`%APPDATA%\AC8GMeter\missions\`），游戏内 Mod 保存在 Mod 文件夹的 `missions\`，每场任务两个文件，文件名以保存时刻（UTC）开头，例如 `20261008-140312_m3`（同一秒内重名时追加 `-2`、`-3`…；保留数量按保存时刻、任务编号、追加序号排序，删除最旧的）：
 
 - `….trace.csv`：G 曲线，每 1/20 s 一行，列为 `t,g_mean,g_min,g_max,g_sustained,onset,aoa,speed,alt,high_g`（任务时间 s、G、G/s、度、m/s、m）。`g_mean`/`g_min`/`g_max` 为实时 G 在该格内的时间加权均值和极值，`g_sustained` 为持续 G 的时间加权均值（为空表示该格没有持续值），`high_g` 为持续高 G 段标记；`aoa` 为空表示无有效迎角，其余列必须是有限数值，否则读取失败。开头的 `#` 行是说明。可直接用表格软件打开。
 - `….json`：任务摘要（格式版本 schema 2），包括保存时间、标签（如 `Simulator: Dogfight mix`）、G 模式、阈值和 W（`min_excursion_s`）、全部统计值（峰值与持续值）、各窗口平均 G 的最大/最小值、样本计数以及对应 CSV 的文件名。旧版（schema 1）文件仍可读取：其极值和曲线是旧版的开闭滤波值，读取后作为持续值显示（标注 “Filtered … (v1 file)”），峰值显示“--”，曲线图例标为 “filtered min-max (v1 file)”；窗口平均值由曲线重新计算。JSON 最后写入，两个文件都通过临时文件 + 重命名原子写入，中途崩溃不会留下残缺记录。
