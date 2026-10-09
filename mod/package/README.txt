@@ -17,12 +17,16 @@ anti-cheat null client (see 2.). Never use mods online.
    Manual install: copy this AC8GMeter folder into ...\Win64\<UE4SS folder>\Mods\. UE4SS needs
    HookEngineTick = 1 in UE4SS-settings.ini.
 
-2. Offline launch
-   Steam > ACE COMBAT 8 > Properties > Launch Options (the installer copies this line):
-       cmd /d /c "set EOS_USE_ANTICHEATCLIENTNULL=1&& %command% -anticheat_settings=AC8_Offline.json"
-   EasyAntiCheat\AC8_Offline.json is the game's Settings.json plus "allow_null_client": "true".
-   To play online again: remove the launch option and uninstall (or disable UE4SS).
-   (The AC8 Tweaks offline launcher, which sets AC8TWEAKS_OFFLINE=1, is accepted too.)
+2. Offline launch (the mod starts only when Easy Anti-Cheat is not active)
+   Either:
+   a) Steam > ACE COMBAT 8 > Properties > Launch Options (the installer copies this line):
+        cmd /d /c "set EOS_USE_ANTICHEATCLIENTNULL=1&& %command% -anticheat_settings=AC8_Offline.json"
+      EasyAntiCheat\AC8_Offline.json is the game's Settings.json plus "allow_null_client": "true".
+   b) or start Game\Binaries\Win64\AceCombat8.exe directly (with a steam_appid.txt containing
+      2288340 next to it), so the anti-cheat service never starts;
+   c) or the AC8 Tweaks offline launcher.
+   To play online again: launch normally from Steam without the launch option, and uninstall
+   (or disable UE4SS).
 
 3. Use
    Ctrl+F8  settings menu          Ctrl+F9  move the overlay (drag), again to finish

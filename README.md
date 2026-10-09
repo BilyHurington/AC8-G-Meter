@@ -131,7 +131,7 @@ Windows（Win32 + Direct3D 12，与游戏内叠加层使用相同的 ImGui 后�
 - 把 Mod 装到 `Game\Binaries\Win64\<UE4SS 文件夹>\Mods\AC8GMeter`。Mod 文件夹里的 `enabled.txt` 让 UE4SS 自动加载它，不会改动各 Mod 共用的 `mods.txt`。现有 UE4SS 处于禁用状态，或 `HookEngineTick = 0` 时会给出提示；设置了自定义 Mods 文件夹时拒绝安装。
 - 没有 `EasyAntiCheat\AC8_Offline.json` 时生成它（游戏的 `Settings.json` 加上 `"allow_null_client": "true"`），并把 Steam 启动选项复制到剪贴板。
 
-再次运行可以选择**更新/修复**（保留设置、任务记录和改过的 `config.lua`）或**卸载**（可选同时删除任务记录）。安装内容记录在 Mod 文件夹的 `install.json`，卸载只删除这些；UE4SS 只有在是本程序装的、且没有其他 Mod 在用时才会删除。若游戏不是离线启动（未设置 `EOS_USE_ANTICHEATCLIENTNULL=1`），Mod 不会启动。命令行用法：`--install` / `--uninstall [--delete-data]` `[--game-dir <dir>] [--report <file>]`，不显示界面，用于自动化测试；退出码 0 成功、1 失败、2 不是游戏目录或被阻止、3 游戏正在运行、4 参数错误。界面底部的“第三方软件许可”链接会打开全部许可文本。
+再次运行可以选择**更新/修复**（保留设置、任务记录和改过的 `config.lua`）或**卸载**（可选同时删除任务记录）。安装内容记录在 Mod 文件夹的 `install.json`，卸载只删除这些；UE4SS 只有在是本程序装的、且没有其他 Mod 在用时才会删除。Mod 只在 Easy Anti-Cheat 未激活时启动。以下情况都算离线：设置了上面的启动选项（`EOS_USE_ANTICHEATCLIENTNULL=1`）；直接运行 `AceCombat8.exe`（旁边放内容为 `2288340` 的 `steam_appid.txt`），此时 EAC 服务不会启动；或者使用 AC8 Tweaks 的离线启动器。命令行用法：`--install` / `--uninstall [--delete-data]` `[--game-dir <dir>] [--report <file>]`，不显示界面，用于自动化测试；退出码 0 成功、1 失败、2 不是游戏目录或被阻止、3 游戏正在运行、4 参数错误。界面底部的“第三方软件许可”链接会打开全部许可文本。
 
 随附的 UE4SS 放在 `third_party/ue4ss/`，附有来源、SHA-256（构建时校验）、MIT 许可证和其内含第三方组件的许可清单；这些许可文件也会装进 Mod 文件夹。安装包内容用 Windows 自带的压缩 API（LZMS）压缩后嵌入 exe。Mod DLL 和安装程序静态链接 C++ 运行库，不依赖 VC++ 运行库。手动安装：把 `build/mod_package/AC8GMeter/` 复制到 UE4SS 的 `Mods` 文件夹。
 

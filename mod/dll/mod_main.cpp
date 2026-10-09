@@ -130,14 +130,39 @@ void logUe4ssBuild() {
   logf("UE4SS build not in the checked list (sha256 {}); the Lua bridge only needs 6 stable exports", hash);
 }
 
-// Offline play only: the community launch methods set one of these (see README).
+// Whether the Easy Anti-Cheat service is running. It runs for the whole session when the game
+// is started protected (Steam's normal launch through start_protected_game.exe), and not at
+// all when the game executable is started directly.
+bool antiCheatServiceRunning() {
+  const SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+  if (!manager) return true;  // cannot tell: assume protected
+  bool running = false;
+  if (const SC_HANDLE service = OpenServiceW(manager, L"EasyAntiCheat_EOS", SERVICE_QUERY_STATUS)) {
+    SERVICE_STATUS status{};
+    running = !QueryServiceStatus(service, &status) || status.dwCurrentState != SERVICE_STOPPED;
+    CloseServiceHandle(service);
+  }  // not installed: not running
+  CloseServiceHandle(manager);
+  return running;
+}
+
+// Offline play only. Accepted: the community launch option and AC8 Tweaks' launcher (they set
+// one of these variables), or any launch without the anti-cheat service (the game executable
+// started directly). Logs which one applied.
 bool offlineLaunch() {
   for (const wchar_t* name : {L"EOS_USE_ANTICHEATCLIENTNULL", L"AC8TWEAKS_OFFLINE"}) {
     wchar_t* value = nullptr;
     std::size_t len = 0;
     const bool set = _wdupenv_s(&value, &len, name) == 0 && value && std::wstring(value) == L"1";
     std::free(value);
-    if (set) return true;
+    if (set) {
+      logf("offline launch: {}=1", ft::pathToUtf8(name));
+      return true;
+    }
+  }
+  if (!antiCheatServiceRunning()) {
+    logLine("offline launch: the Easy Anti-Cheat service is not running");
+    return true;
   }
   return false;
 }
@@ -166,7 +191,7 @@ bool start(const std::vector<double>& args, const fs::path& modDir) {
     return false;
   }
   if (!offlineLaunch()) {
-    logLine("not started: the game was not launched offline (EOS_USE_ANTICHEATCLIENTNULL=1); see README");
+    logLine("not started: Easy Anti-Cheat is running (online-capable launch); see README for offline launch");
     return false;
   }
   logUe4ssBuild();
