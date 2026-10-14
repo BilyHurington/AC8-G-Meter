@@ -1,6 +1,6 @@
 // ac8gmeter.dll: the functions the Lua sampler (mod/lua/Scripts/main.lua) loads with
 // package.loadlib. Both are lua_CFunctions:
-//   ac8gmeter_start(protocolVersion, recordCsv[, debugRecording]) -> 1 started, 0 refused
+//   ac8gmeter_start(protocolVersion, recordCsv[, debugRecording[, overlay]]) -> 1 started, 0 refused
 //                                                                    (UE4SS mod thread)
 //   ac8gmeter_frame(<LuaField::Count numbers>[, <LuaDebugField::Count numbers>])
 //                                               -> 1 accepted, 2 accepted and the debug block is
@@ -189,7 +189,7 @@ int returnNumber(lua_State* state, double value) {
 
 // Runs once. The log is already open (ac8gmeter_start).
 bool start(const std::vector<double>& args, const fs::path& modDir) {
-  if ((args.size() != 2 && args.size() != 3) || args[0] != kStartProtocol) {
+  if (args.size() < 2 || args.size() > 4 || args[0] != kStartProtocol) {
     logLine("ac8gmeter_start: unexpected arguments (main.lua and the DLL are from different versions?)");
     return false;
   }
@@ -200,9 +200,11 @@ bool start(const std::vector<double>& args, const fs::path& modDir) {
   logUe4ssBuild();
   ft::mod::ModOptions options;
   options.recordCsv = args[1] != 0.0;
-  options.debugRecording = args.size() == 3 && args[2] != 0.0;
+  options.debugRecording = args.size() >= 3 && args[2] != 0.0;
+  const bool overlay = args.size() < 4 || args[3] != 0.0;
   g_runtime = new ft::mod::ModRuntime(modDir, options);
-  if (!ft::mod::startOverlay(*g_runtime)) logLine("overlay could not be started; telemetry still runs");
+  if (!overlay) logLine("overlay off (config.lua Overlay = false); telemetry still runs");
+  else if (!ft::mod::startOverlay(*g_runtime)) logLine("overlay could not be started; telemetry still runs");
   logf("started (CSV recording {}, debug recording {})", options.recordCsv ? "on" : "off",
        options.debugRecording ? "on" : "off");
   return true;

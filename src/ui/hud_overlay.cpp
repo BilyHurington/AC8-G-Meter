@@ -57,6 +57,9 @@ bool HudOverlayLayer::draw(OverlayFrame& f) {
     modified = true;
   }
   if (lines_.empty() && !f.editMode) return modified;
+  // Outside missions (menus, results) the HUD hides, unless it is being placed.
+  const bool inMission = f.snapshot.phase == MissionPhase::Active || f.snapshot.phase == MissionPhase::Paused;
+  if (o.onlyInMission && !inMission && !f.editMode) return modified;
 
   ImFont* font = font_ ? font_ : ImGui::GetFont();
   const OverlayLayout layout = computeOverlayLayout(o, f.screenW, f.screenH);

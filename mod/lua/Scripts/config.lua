@@ -9,4 +9,9 @@ return {
     -- about 130 MB per hour). It can also be switched on and off in game: Ctrl+F8 > Diagnostics;
     -- that switch is off again at the next start.
     DebugRecording = false,
+
+    -- Draw the overlay (HUD, menus, debrief) into the game. With false nothing is drawn and the
+    -- game's rendering is not hooked at all; G is still computed, missions are still saved and
+    -- recorded. For finding out whether a graphics problem comes from the overlay.
+    Overlay = true,
 }

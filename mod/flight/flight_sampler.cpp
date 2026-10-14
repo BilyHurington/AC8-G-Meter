@@ -35,6 +35,10 @@ void FlightSampler::onFrame(const LuaFrame& f, std::vector<RawFlightSample>& out
     pawnId_ = f.pawnId;
     warmupLeftS_ = opt_.warmupS;
   }
+  // Not flying yet: AC8 spawns the plane at the origin, then places it with zero velocity, then
+  // sets flight speed in one frame (a huge false G). Such frames are neither samples nor
+  // warm-up, so the warm-up starts once the plane moves (on a runway: once it rolls).
+  if (length(f.velocityCmS) * kCmToM < opt_.minFlyingSpeedMS) return;
   if (warmupLeftS_ > kTimeEpsS) {
     warmupLeftS_ -= step;
     return;

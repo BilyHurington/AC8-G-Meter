@@ -21,6 +21,8 @@ class FlightSampler {
     // defaults before the mission places it (observed by AC8 Mouse-Aim).
     double warmupS = 0.5;
     double missionEndAfterS = 3.0;
+    // Below this speed a possessed plane is not flying yet (still being spawned / placed).
+    double minFlyingSpeedMS = 1.0;
   };
 
   FlightSampler() = default;

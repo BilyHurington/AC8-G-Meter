@@ -141,6 +141,23 @@ TEST_CASE("flight sampler: mission ends after the plane is gone for a while") {
   CHECK(out.empty());
 }
 
+TEST_CASE("flight sampler: a plane not moving yet is not flying (spawn)") {
+  FlightSampler s;
+  std::vector<RawFlightSample> out;
+  // As in AC8: at the origin, then placed in the air, both with zero velocity.
+  for (int i = 0; i < 60; ++i)
+    s.onFrame(FrameBuilder().set(LuaField::WorldTimeS, i / 60.0).frame(), out);
+  for (int i = 60; i < 120; ++i)
+    s.onFrame(FrameBuilder().set(LuaField::WorldTimeS, i / 60.0).set(LuaField::LocX, 1183400.0).set(LuaField::LocZ, 60000.0).frame(), out);
+  CHECK(out.empty());
+  CHECK_FALSE(s.inMission());
+  // Moving: the 0.5 s warm-up starts only now.
+  out = fly(s, 2.0, 30);
+  CHECK(out.empty());
+  out = fly(s, 2.5, 1);
+  CHECK(out.size() == 1);
+  CHECK(s.inMission());
+}
 TEST_CASE("flight sampler: frozen game time adds no samples") {
   FlightSampler s;
   fly(s, 0.0, 60);

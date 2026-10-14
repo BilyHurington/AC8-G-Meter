@@ -136,6 +136,9 @@ void SettingsMenu::overlaySection(Settings& s, bool& editMode, SettingsMenuResul
   helpMarker("While editing, drag the telemetry block with the mouse. "
              "The position is stored relative to the screen size.");
   r.changed |= ImGui::Checkbox("Lock position", &o.locked);
+  r.changed |= ImGui::Checkbox("Only during missions", &o.onlyInMission);
+  helpMarker("Hide the overlay in menus and on result screens. It is always shown while "
+             "editing the layout.");
 
   r.changed |= ImGui::SliderFloat("Font size", &o.fontSizeAt1080p, 8.0f, 64.0f, "%.0f px @1080p",
                                   ImGuiSliderFlags_AlwaysClamp);

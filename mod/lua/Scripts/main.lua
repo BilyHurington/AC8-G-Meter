@@ -141,7 +141,8 @@ end
 -- Ctrl+F7: start / stop a read-only capture of game state fields (probe.lua).
 RegisterKeyBind(Key.F7, { ModifierKey.CONTROL }, function() probe.request() end)
 
-if start_native(START_PROTOCOL, config.RecordCsv and 1 or 0, config.DebugRecording and 1 or 0) ~= 1 then
+if start_native(START_PROTOCOL, config.RecordCsv and 1 or 0, config.DebugRecording and 1 or 0,
+        config.Overlay == false and 0 or 1) ~= 1 then
     notice("Not started; see ac8gmeter.log in the mod folder.")
 elseif EngineTickAvailable == false or type(LoopInGameThreadAfterFrames) ~= "function" then
     notice("Disabled: UE4SS game-thread tick unavailable (HookEngineTick=1 is required).")

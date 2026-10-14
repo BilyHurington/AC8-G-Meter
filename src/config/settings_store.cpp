@@ -107,6 +107,7 @@ std::string settingsToJson(const Settings& s) {
        {{"pos_x", o.posX},
         {"pos_y", o.posY},
         {"locked", o.locked},
+      {"only_in_mission", o.onlyInMission},
         {"font_size_1080p", o.fontSizeAt1080p},
         {"line_spacing", o.lineSpacing},
         {"text_color", colorToHex(o.textColor)},
@@ -148,6 +149,7 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
     readFloat(*o, "pos_x", ov.posX);
     readFloat(*o, "pos_y", ov.posY);
     readBool(*o, "locked", ov.locked);
+    readBool(*o, "only_in_mission", ov.onlyInMission);
     readFloat(*o, "font_size_1080p", ov.fontSizeAt1080p);
     readFloat(*o, "line_spacing", ov.lineSpacing);
     readColor(*o, "text_color", ov.textColor);

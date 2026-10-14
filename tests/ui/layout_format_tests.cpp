@@ -12,8 +12,8 @@ TEST_CASE("layout at 1920x1080 matches the spec") {
   const OverlayLayout l = computeOverlayLayout(s, 1920.0f, 1080.0f);
   CHECK(l.x == doctest::Approx(86.4));
   CHECK(l.y == doctest::Approx(172.8));
-  CHECK(l.fontPx == doctest::Approx(16.0));
-  CHECK(l.lineHeightPx == doctest::Approx(21.0));
+  CHECK(l.fontPx == doctest::Approx(20.0));
+  CHECK(l.lineHeightPx == doctest::Approx(26.25));
 }
 
 TEST_CASE("layout scales with resolution") {
@@ -21,14 +21,14 @@ TEST_CASE("layout scales with resolution") {
   const OverlayLayout uhd = computeOverlayLayout(s, 3840.0f, 2160.0f);
   CHECK(uhd.x == doctest::Approx(172.8));
   CHECK(uhd.y == doctest::Approx(345.6));
-  CHECK(uhd.fontPx == doctest::Approx(32.0));
-  CHECK(uhd.lineHeightPx == doctest::Approx(42.0));
+  CHECK(uhd.fontPx == doctest::Approx(40.0));
+  CHECK(uhd.lineHeightPx == doctest::Approx(52.5));
 
   const OverlayLayout hd = computeOverlayLayout(s, 1280.0f, 720.0f);
   CHECK(hd.x == doctest::Approx(57.6));
   CHECK(hd.y == doctest::Approx(115.2));
-  CHECK(hd.fontPx == doctest::Approx(16.0 * 720.0 / 1080.0));
-  CHECK(hd.lineHeightPx == doctest::Approx(14.0));
+  CHECK(hd.fontPx == doctest::Approx(20.0 * 720.0 / 1080.0));
+  CHECK(hd.lineHeightPx == doctest::Approx(17.5));
   CHECK(resolutionScale(0.0f) == 1.0f);  // degenerate screen does not divide by zero
 }
 

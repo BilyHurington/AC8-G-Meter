@@ -30,7 +30,9 @@ TEST_CASE("settings defaults match the spec") {
   CHECK(s.version == Settings::kVersion);
   CHECK(s.overlay.posX == doctest::Approx(0.045));
   CHECK(s.overlay.posY == doctest::Approx(0.16));
-  CHECK(s.overlay.fontSizeAt1080p == 16.0f);
+  CHECK(s.overlay.fontSizeAt1080p == 20.0f);
+  CHECK(s.overlay.onlyInMission);
+  CHECK_FALSE(s.diagnostics.debugRecording);
   CHECK(s.overlay.textColor == Color::fromHex(0x93F6A8));
   CHECK(s.overlay.opacity == 1.0f);
   CHECK(s.overlay.shadow);

@@ -34,7 +34,9 @@ anti-cheat null client (see 2.). Never use mods online.
    After each sortie the debrief opens with the G chart. Files in the mod folder:
      settings.json, missions\ (mission history), recordings\ (flight CSV, see
      Scripts\config.lua), ac8gmeter.log
-   Borderless or windowed display mode recommended.
+   Borderless or windowed display mode recommended. The overlay shows during missions only (see
+   Ctrl+F8 > Only during missions); Overlay = false in Scripts\config.lua turns it off completely
+   (no graphics hook; G is still computed and missions are still saved).
    Debug recording (Ctrl+F8 > Diagnostics): writes every frame's raw aircraft data from the game
    and the values computed from it to debug\ac8_debug_*.csv (about 130 MB per hour at 60 fps); for checking
    the G calculation. The switch is off again at the next start; DebugRecording = true in

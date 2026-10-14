@@ -49,8 +49,9 @@ struct OverlaySettings {
   float posX = 0.045f;            // top-left corner, fraction of screen width
   float posY = 0.16f;             // top-left corner, fraction of screen height
   bool locked = false;            // when locked, edit mode cannot drag the overlay
-  float fontSizeAt1080p = 16.0f;  // px at 1080p; scaled by screenHeight / 1080
-  float lineSpacing = 1.3125f;    // line height = font size * lineSpacing (21 px at 16 px)
+  bool onlyInMission = true;      // hidden outside missions (phase Active / Paused) unless editing
+  float fontSizeAt1080p = 20.0f;  // px at 1080p; scaled by screenHeight / 1080
+  float lineSpacing = 1.3125f;    // line height = font size * lineSpacing (26 px at 20 px)
   Color textColor = Color::fromHex(0x93F6A8);
   float opacity = 1.0f;           // multiplies text, shadow and background alpha
   bool shadow = true;
