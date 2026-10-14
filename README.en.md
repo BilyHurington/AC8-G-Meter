@@ -101,19 +101,6 @@ The hotkeys can be changed in the settings menu. On the macOS prototype, `Cmd` w
 
 `Ctrl+F7` starts or stops the read-only state probe. It writes changes of the relevant aircraft, controller, HUD and game mode fields to `probe-*.txt`, for finding mission-flow signals.
 
-## Known issues
-
-- **Mission detection (first version):**
-  - A mission runs while the player controls an aircraft. Paused time does not count.
-  - The mission ends, and the debrief opens, once the aircraft has been gone for 3 s (results, menus, loading).
-  - Respawning mid-mission does not end the mission.
-  - The end sequence and replay after a mission still count as mission time, so the debrief opens late.
-  - Quitting a mission is recorded like a finished one.
-  - A restart from the pause menu whose aircraft appears within 3 s (paused time excluded) merges with the previous attempt.
-  - A cutscene of more than 3 s without the aircraft, unpaused, splits a mission in two.
-- **The game's manoeuvres can really reach very high G.** Readings above 100 G in testing match the game's own speed data: they are the game's actual kinematics, not a calculation error. Collision impacts count toward peak G but not toward sustained G.
-- **DLSS Frame Generation:** one game crash was seen in testing with DLSS Frame Generation on. The cause is not yet isolated. If the game crashes, try turning Frame Generation off, or set `Overlay = false`.
-
 ## Features in detail
 
 - **Live metrics:**
