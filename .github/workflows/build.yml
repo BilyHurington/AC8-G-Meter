@@ -1,0 +1,106 @@
+# Windows build + tests on every push / pull request. A pushed tag v<version> (matching
+# project(VERSION) in CMakeLists.txt) also publishes a GitHub Release with the three
+# distribution files built by the ac8gmeter_dist target (see cmake/Dist.cmake).
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Version
+        id: version
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(\S+ VERSION (\S+)' | Select-Object -First 1
+          $project = $m.Matches[0].Groups[1].Value
+          $version = $project
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+            # The tag may add a suffix (v0.2.0-rc1) but must not disagree with the code.
+            if ($version -ne $project -and -not $version.StartsWith("$project-")) {
+              throw "Tag $env:GITHUB_REF_NAME does not match project version $project"
+            }
+          } else {
+            $version = "$project-dev.$($env:GITHUB_SHA.Substring(0, 7))"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "Version: $version"
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DFT_DIST_VERSION=${{ steps.version.outputs.version }}"
+
+      - name: Build
+        run: cmake --build build
+
+      # The overlay harness needs a D3D12 GPU, which hosted runners do not have.
+      - name: Test
+        run: ctest --test-dir build -E overlay_harness --output-on-failure
+
+      - name: Package
+        run: cmake --build build --target ac8gmeter_dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AC8GMeter-${{ steps.version.outputs.version }}
+          path: build/dist/*
+          if-no-files-found: error
+
+      # Symbols for reading crash dumps of this exact build; not part of the release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AC8GMeter-${{ steps.version.outputs.version }}-pdb
+          path: |
+            build/mod/dll/ac8gmeter.pdb
+            build/AC8GMeter-Installer.pdb
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: AC8GMeter-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s extglob
+          files=(dist/AC8GMeter-*@(-Full.zip|-ModOnly.zip|-Installer.exe))
+          [ ${#files[@]} -eq 3 ] || { echo "expected 3 release files, got: ${files[*]}"; exit 1; }
+          (cd dist && sha256sum "${files[@]##*/}") > dist/SHA256SUMS.txt
+          prerelease=()
+          # 0.x versions and suffixed tags (v1.0.0-rc1) are prereleases.
+          [[ "$TAG" == v0.* || "$TAG" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$TAG" "${files[@]}" dist/SHA256SUMS.txt \
+            --title "AC8 G-Meter ${TAG#v}" \
+            --notes-file .github/release_notes.md \
+            "${prerelease[@]}"

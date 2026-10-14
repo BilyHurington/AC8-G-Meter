@@ -68,6 +68,7 @@ if(FT_BUILD_MOD)
   add_subdirectory(mod)
   add_subdirectory(apps/overlay_harness)
   add_subdirectory(installer)
+  include(cmake/Dist.cmake)  # release zips + installer (target ac8gmeter_dist)
 endif()
 
 if(FT_BUILD_TESTS)

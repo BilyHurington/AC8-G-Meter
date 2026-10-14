@@ -14,8 +14,16 @@ anti-cheat null client (see 2.). Never use mods online.
    Run it again to update (settings and mission history are kept) or to uninstall. UE4SS is
    removed only if the installer put it there and no other mod uses it.
 
-   Manual install: copy this AC8GMeter folder into ...\Win64\<UE4SS folder>\Mods\. UE4SS needs
-   HookEngineTick = 1 in UE4SS-settings.ini.
+   Or, from the zip files of a release:
+   - AC8GMeter-<version>-Full.zip (UE4SS + this mod): extract into the ACE COMBAT 8 folder so
+     that its Game folder merges with the game's. Only for a game without UE4SS (it would
+     replace an existing UE4SS and its settings). To uninstall, delete
+     Game\Binaries\Win64\dwmapi.dll, override.txt and the UE4SS folder.
+   - AC8GMeter-<version>-ModOnly.zip (this mod only): copy its AC8GMeter folder into
+     ...\Win64\<UE4SS folder>\Mods\. UE4SS needs HookEngineTick = 1 in UE4SS-settings.ini.
+     To uninstall, delete that folder.
+   The zips do not create EasyAntiCheat\AC8_Offline.json for 2.a): make it yourself (a copy
+   of EasyAntiCheat\Settings.json with "allow_null_client": "true" added) or use 2.b)/2.c).
 
 2. Offline launch (the mod starts only when Easy Anti-Cheat is not active)
    Either:

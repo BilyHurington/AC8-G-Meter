@@ -8,13 +8,27 @@ A G-meter for **Ace Combat 8: Wings of Theve**. It draws a clean, HUD-styled tex
 - **Mission debrief.** Includes an interactive full-mission G chart (zoom, pan, hover). It shows peak G and sustained G (spikes shorter than 0.2 s removed), plus the best and worst 1/5/10/30/60 s average G and high-G episodes.
 - **Mission history.** Every sortie is saved as JSON plus a CSV trace that opens in Excel or Python. Past debriefs can be reopened from the history window.
 
-Written in C++20 with Dear ImGui, as layered libraries (core / config / ui / storage) designed to drop into a UE4SS mod. Current stage: standalone prototypes for macOS (SDL3 + Metal) and Windows (Win32 + Direct3D 12), driven by a physics-based flight simulator and replayable flight logs. The UE4SS integration into the game comes next.
+Written in C++20 with Dear ImGui, as layered libraries (core / config / ui / storage). Runs in the game as a UE4SS mod (offline single player only), and as standalone prototypes for macOS (SDL3 + Metal) and Windows (Win32 + Direct3D 12) driven by a physics-based flight simulator and replayable flight logs.
+
+[![build](https://github.com/BilyHurington/AC8-G-Meter/actions/workflows/build.yml/badge.svg)](https://github.com/BilyHurington/AC8-G-Meter/actions/workflows/build.yml) Downloads: [Releases](https://github.com/BilyHurington/AC8-G-Meter/releases)
 
 ---
 
 **AC8 G-Meter（AC8 过载表）**：《皇牌空战8：Wings of Theve》的 G 值显示叠加层 Mod。在游戏画面上以透明文字的形式实时显示 G 值、G Onset、迎角等飞行数据，并在任务结束后给出飞行统计。不修改原版 HUD。
 
-**当前阶段：** macOS 与 Windows 独立原型。使用模拟飞行数据和可回放的 CSV 日志，不依赖游戏本体。下一步通过 UE4SS 接入 AC8。
+**当前阶段：** 游戏内 UE4SS Mod 首个测试版（仅限离线单人）；另有 macOS 与 Windows 独立原型，使用模拟飞行数据和可回放的 CSV 日志，不依赖游戏本体。
+
+## 下载
+
+在 [Releases](https://github.com/BilyHurington/AC8-G-Meter/releases) 页面下载，三选一：
+
+| 文件 | 用法 |
+|---|---|
+| `AC8GMeter-<版本>-Installer.exe` | **推荐。** 放到游戏根目录双击运行，自动安装 UE4SS（仅在没有时）和 Mod；再次运行可更新或卸载。详见下文[游戏内 Mod](#游戏内-modue4ss) |
+| `AC8GMeter-<版本>-Full.zip` | UE4SS + Mod。解压到游戏根目录（与 `Game` 文件夹合并）。仅适用于尚未安装 UE4SS 的游戏 |
+| `AC8GMeter-<版本>-ModOnly.zip` | 仅 Mod，用于已有 UE4SS：把 `AC8GMeter` 文件夹复制到 `Game\Binaries\Win64\<UE4SS 文件夹>\Mods\` |
+
+压缩包不会生成离线启动用的 `EasyAntiCheat\AC8_Offline.json`，离线启动方法见包内 `AC8GMeter-README.txt`。
 
 ## 功能
 
@@ -78,7 +92,10 @@ Dear ImGui 1.92、nlohmann/json 和 doctest 会在配置时由 CMake 的 FetchCo
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
 ctest --test-dir build --output-on-failure
+cmake --build build --target ac8gmeter_dist   # 发布文件：build/dist/ 下的 Full/ModOnly 压缩包和安装程序
 ```
+
+GitHub Actions（`.github/workflows/build.yml`）在每次推送时构建并运行测试（无 GPU，跳过 `overlay_harness`），构建产物可在 Actions 页面下载。推送与 `project(VERSION)` 一致的标签（如 `v0.1.0`）会自动创建 Release 并上传三个发布文件和 `SHA256SUMS.txt`；0.x 版本标记为预发布。
 
 ## 运行
 
