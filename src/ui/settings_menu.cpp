@@ -70,6 +70,7 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   hotkeySection(s, r);
 
   missionSection(s, hasLastReport, archive, r);
+  if (diagnosticsAvailable_) diagnosticsSection(s, r);
   ImGui::PopItemWidth();
 
   ImGui::Spacing();
@@ -112,6 +113,20 @@ SettingsMenuResult SettingsMenu::draw(SettingsStore& store, bool& open, bool& ed
   ImGui::End();
   if (!open) capture_ = Capture::None;
   return r;
+}
+
+void SettingsMenu::diagnosticsSection(Settings& s, SettingsMenuResult& r) {
+  sectionHeader("Diagnostics");
+  r.changed |= ImGui::Checkbox("Debug recording", &s.diagnostics.debugRecording);
+  helpMarker("Writes every frame's raw aircraft data from the game (position, velocity, axes, "
+             "rotation, time, time dilation, the game's own speed if available, ...) and the "
+             "values computed from it to a CSV file, about 130 MB per hour. For checking the G "
+             "calculation. Off again at the next start of the game.");
+  if (!diagnosticsStatus_.empty()) {
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", diagnosticsStatus_.c_str());
+    ImGui::PopTextWrapPos();
+  }
 }
 
 void SettingsMenu::overlaySection(Settings& s, bool& editMode, SettingsMenuResult& r) {

@@ -7,7 +7,10 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -104,7 +107,7 @@ TEST_CASE("mod DLL: a simulated sortie through the Lua bridge") {
   CHECK(call(frame, luaFrame(nullptr, 0.0)).empty());  // before start: ignored
   // UE4SS runs main.lua (and so start) on its mod thread; frames come from the game thread.
   std::vector<double> started;
-  std::thread([&] { started = call(start, {1.0, 1.0}); }).join();  // record CSV
+  std::thread([&] { started = call(start, {1.0, 1.0, 1.0}); }).join();  // record CSV, debug recording
   CHECK(started == std::vector<double>{1.0});
   CHECK(call(start, {99.0, 0.0}) == std::vector<double>{1.0});  // starts once; later calls report it
   CHECK(call(frame, {1.0, 2.0}) == std::vector<double>{0.0});   // malformed frame: rejected
@@ -112,7 +115,19 @@ TEST_CASE("mod DLL: a simulated sortie through the Lua bridge") {
   std::thread([&] { otherThread = call(frame, luaFrame(nullptr, 0.0)); }).join();
   CHECK(otherThread.empty());  // frames only from the first frame's thread
 
-  // 20 s of flight, then 4 s without a plane (results / menus) ends the mission.
+  // 20 s of flight, then 4 s without a plane (results / menus) ends the mission. Like main.lua,
+  // the debug block follows the base frame once the DLL answered 2.
+  bool debugWanted = false;
+  auto send = [&](std::vector<double> values) {
+    if (debugWanted) {
+      values.push_back(42.0);  // real time
+      values.resize(values.size() + ft::mod::kLuaDebugFieldCount - 1, std::numeric_limits<double>::quiet_NaN());
+    }
+    const std::vector<double> result = call(frame, std::move(values));
+    REQUIRE(result.size() == 1);
+    REQUIRE((result[0] == 1.0 || result[0] == 2.0));
+    debugWanted = result[0] == 2.0;
+  };
   ft::SimulatedSource sim;
   std::vector<ft::RawFlightSample> samples;
   double t = 0.0;
@@ -121,10 +136,11 @@ TEST_CASE("mod DLL: a simulated sortie through the Lua bridge") {
     sim.poll(1.0 / 60.0, samples);
     for (const ft::RawFlightSample& s : samples) {
       t = s.t;
-      REQUIRE(call(frame, luaFrame(&s, s.t)) == std::vector<double>{1.0});
+      send(luaFrame(&s, s.t));
     }
   }
-  for (int i = 0; i < 4 * 60; ++i) REQUIRE(call(frame, luaFrame(nullptr, t + i / 60.0)) == std::vector<double>{1.0});
+  CHECK(debugWanted);
+  for (int i = 0; i < 4 * 60; ++i) send(luaFrame(nullptr, t + i / 60.0));
 
   CHECK(waitFor([&] { return filesIn(modDir / "missions", ".json").size() == 1; }));
   const std::vector<fs::path> recordings = filesIn(modDir / "recordings", ".csv");
@@ -132,6 +148,43 @@ TEST_CASE("mod DLL: a simulated sortie through the Lua bridge") {
   CHECK(readAll(recordings.front()).size() > 100000);  // ~1150 rows
   CHECK(waitFor([&] {
     const std::string log = readAll(modDir / "ac8gmeter.log");
-    return log.find("mission started") != std::string::npos && log.find("mission ended") != std::string::npos;
+    return log.find("mission started") != std::string::npos && log.find("mission ended") != std::string::npos &&
+           log.find("debug recording to") != std::string::npos;
   }));
+
+  // The debug file: a row per frame, and the plain finite-difference G agrees with the
+  // pipeline's unsmoothed G on this smooth simulated flight.
+  const std::vector<fs::path> debugFiles = filesIn(modDir / "debug", ".csv");
+  REQUIRE(debugFiles.size() == 1);
+  std::istringstream csv(readAll(debugFiles.front()));
+  std::string line;
+  std::vector<std::string> header;
+  auto split = [](const std::string& s) {
+    std::vector<std::string> out;
+    std::stringstream ss(s);
+    for (std::string cell; std::getline(ss, cell, ',');) out.push_back(cell);
+    if (!s.empty() && s.back() == ',') out.emplace_back();
+    return out;
+  };
+  int rows = 0, compared = 0;
+  double worstDiff = 0.0;
+  while (std::getline(csv, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    const std::vector<std::string> cells = split(line);
+    if (header.empty()) {
+      header = cells;
+      continue;
+    }
+    REQUIRE(cells.size() == header.size());
+    ++rows;
+    auto col = [&](const char* name) { return cells[static_cast<std::size_t>(std::find(header.begin(), header.end(), name) - header.begin())]; };
+    if (rows > 1) CHECK(col("real_time_s") == "42.000000");  // the block is asked for after the first frame
+    if (col("valid") == "1" && !col("fd_nz_g").empty() && rows > 120) {
+      worstDiff = std::max(worstDiff, std::abs(std::stod(col("fd_nz_g")) - std::stod(col("g_raw"))));
+      ++compared;
+    }
+  }
+  CHECK(rows > 1300);  // every frame, also without a plane
+  CHECK(compared > 1000);
+  CHECK(worstDiff < 0.5);
 }

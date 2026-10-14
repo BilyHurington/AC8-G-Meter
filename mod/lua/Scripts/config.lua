@@ -4,4 +4,9 @@ return {
     -- Write every mission's flight data to recordings\ac8_flight_*.csv in the mod folder
     -- (about 6 MB per 10 minutes at 60 fps). Used to tune the G filters on real game data.
     RecordCsv = true,
+
+    -- Debug recording from the start of the game (every frame's raw data to debug\ac8_debug_*.csv,
+    -- about 130 MB per hour). It can also be switched on and off in game: Ctrl+F8 > Diagnostics;
+    -- that switch is off again at the next start.
+    DebugRecording = false,
 }

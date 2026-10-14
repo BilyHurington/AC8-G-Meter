@@ -7,6 +7,7 @@ local START_PROTOCOL = 1
 local directory = assert(debug.getinfo(1, "S").source:sub(2):match("^(.*[/\\])"))
 local config = dofile(directory .. "config.lua")
 local probe = dofile(directory .. "probe.lua")
+local debug_block = dofile(directory .. "debug.lua")
 local dll = directory .. "ac8gmeter.dll"
 local start_native = assert(package.loadlib(dll, "ac8gmeter_start"))
 local frame_native = assert(package.loadlib(dll, "ac8gmeter_frame"))
@@ -97,6 +98,7 @@ for i = 1, 21 do frame[i] = 0 end  -- LuaField::Count
 frame[1] = FRAME_VERSION
 
 local last_clock = os.clock()  -- os.clock() is wall time with the MSVC runtime
+local debug_wanted = false     -- the DLL asks for the debug block (debug recording on)
 
 local function tick()
     local now = os.clock()
@@ -122,14 +124,24 @@ local function tick()
     else
         for i = 5, 21 do frame[i] = 0 end
     end
-    if frame_native(table.unpack(frame)) ~= 1 then error("frame rejected (see ac8gmeter.log)") end
+    local count = 21
+    if debug_wanted then
+        debug_block.fill(frame, 22, pawn, controller, gs, context, component)
+        count = 21 + debug_block.COUNT
+    end
+    local result = frame_native(table.unpack(frame, 1, count))
+    if result ~= 1 and result ~= 2 then
+        debug_wanted = false  -- a rejected debug block must not stop the sampling: send the base frame
+        error("frame rejected (see ac8gmeter.log)")
+    end
+    debug_wanted = result == 2
     probe.update(pawn, controller, gs, directory)
 end
 
 -- Ctrl+F7: start / stop a read-only capture of game state fields (probe.lua).
 RegisterKeyBind(Key.F7, { ModifierKey.CONTROL }, function() probe.request() end)
 
-if start_native(START_PROTOCOL, config.RecordCsv and 1 or 0) ~= 1 then
+if start_native(START_PROTOCOL, config.RecordCsv and 1 or 0, config.DebugRecording and 1 or 0) ~= 1 then
     notice("Not started; see ac8gmeter.log in the mod folder.")
 elseif EngineTickAvailable == false or type(LoopInGameThreadAfterFrames) ~= "function" then
     notice("Disabled: UE4SS game-thread tick unavailable (HookEngineTick=1 is required).")

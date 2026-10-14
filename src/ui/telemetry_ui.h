@@ -66,6 +66,10 @@ class TelemetryUi {
   // Additional layers drawn after the HUD (e.g. future physiology screen effects).
   void addLayer(std::unique_ptr<IOverlayLayer> layer);
 
+  // For hosts that implement debug recording (Settings::diagnostics): shows the menu's
+  // Diagnostics section with `status` (e.g. the file being written). Render thread.
+  void setDiagnostics(bool available, std::string status);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

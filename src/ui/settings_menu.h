@@ -1,5 +1,8 @@
 #pragma once
 // The in-game settings window (toggled with Ctrl+F8 by default).
+#include <string>
+#include <utility>
+
 #include "config/settings_store.h"
 #include "core/metrics.h"
 
@@ -33,6 +36,12 @@ class SettingsMenu {
                           const MissionArchiveInfo& archive, const FilterState& filter, double now);
   // True while waiting for a key press to rebind a hotkey; global hotkeys are suspended then.
   bool capturingHotkey() const { return capture_ != Capture::None; }
+  // The "Diagnostics" section (Settings::diagnostics) appears only for hosts that implement it;
+  // `status` describes the recording, e.g. the file being written.
+  void setDiagnostics(bool available, std::string status) {
+    diagnosticsAvailable_ = available;
+    diagnosticsStatus_ = std::move(status);
+  }
 
  private:
   enum class Capture { None, Menu, EditMode };
@@ -42,8 +51,11 @@ class SettingsMenu {
   void missionSection(Settings& s, bool hasLastReport, const MissionArchiveInfo& archive, SettingsMenuResult& r);
   void keepMissionsInput(Settings& s, const MissionArchiveInfo& archive, SettingsMenuResult& r);
   void hotkeyRow(const char* label, Hotkey& hotkey, Capture which, SettingsMenuResult& r);
+  void diagnosticsSection(Settings& s, SettingsMenuResult& r);
 
   Capture capture_ = Capture::None;
+  bool diagnosticsAvailable_ = false;
+  std::string diagnosticsStatus_;
   // "Keep missions" value waiting for the user to confirm the deletion (-1 = none).
   int pendingKeep_ = -1;
   int pendingDeletes_ = 0;

@@ -1,5 +1,6 @@
 #include "flight/lua_frame.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace ft::mod {
@@ -24,11 +25,38 @@ bool fail(std::string* error, std::string message) {
 
 }  // namespace
 
-std::optional<LuaFrame> parseLuaFrame(std::span<const double> values, std::string* error) {
-  if (values.size() != static_cast<std::size_t>(kLuaFieldCount)) {
-    fail(error, "expected " + std::to_string(kLuaFieldCount) + " numbers, got " + std::to_string(values.size()));
+const char* luaDebugFieldName(LuaDebugField field) {
+  switch (field) {
+    case LuaDebugField::RealTimeS: return "real_time_s";
+    case LuaDebugField::GlobalTimeDilation: return "global_time_dilation";
+    case LuaDebugField::CustomTimeDilation: return "custom_time_dilation";
+    case LuaDebugField::Pitch: return "pitch_deg";
+    case LuaDebugField::Yaw: return "yaw_deg";
+    case LuaDebugField::Roll: return "roll_deg";
+    case LuaDebugField::MoveVelX: return "move_vel_x_cms";
+    case LuaDebugField::MoveVelY: return "move_vel_y_cms";
+    case LuaDebugField::MoveVelZ: return "move_vel_z_cms";
+    case LuaDebugField::GameSpeedKmh: return "game_speed_kmh";
+    case LuaDebugField::GameSpeedMps: return "game_speed_mps";
+    case LuaDebugField::GameAltitudeM: return "game_altitude_m";
+    case LuaDebugField::ImpactCamera: return "impact_camera";
+    case LuaDebugField::InputIgnored: return "input_ignored";
+    case LuaDebugField::ViewTargetIsPlane: return "view_target_is_plane";
+    case LuaDebugField::WorldToMeters: return "world_to_meters";
+    case LuaDebugField::Count: break;
+  }
+  return "?";
+}
+
+std::optional<LuaFrame> parseLuaFrame(std::span<const double> all, std::string* error) {
+  const std::size_t base = static_cast<std::size_t>(kLuaFieldCount);
+  const std::size_t withDebug = base + static_cast<std::size_t>(kLuaDebugFieldCount);
+  if (all.size() != base && all.size() != withDebug) {
+    fail(error, "expected " + std::to_string(base) + " or " + std::to_string(withDebug) + " numbers, got " +
+                    std::to_string(all.size()));
     return std::nullopt;
   }
+  const std::span<const double> values = all.first(base);
   if (at(values, LuaField::Version) != kLuaFrameVersion) {
     fail(error, "protocol version " + std::to_string(at(values, LuaField::Version)) + ", expected " +
                     std::to_string(kLuaFrameVersion));
@@ -45,6 +73,10 @@ std::optional<LuaFrame> parseLuaFrame(std::span<const double> values, std::strin
   }
 
   LuaFrame f;
+  if (all.size() == withDebug) {
+    f.debug.emplace();
+    std::copy(all.begin() + static_cast<std::ptrdiff_t>(base), all.end(), f.debug->begin());
+  }
   f.worldTimeS = at(values, LuaField::WorldTimeS);
   f.deltaS = at(values, LuaField::DeltaS);
   f.paused = at(values, LuaField::Paused) != 0.0;

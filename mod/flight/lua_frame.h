@@ -1,6 +1,8 @@
 #pragma once
 // The numbers the Lua sampler (mod/lua/Scripts/main.lua) passes to ac8gmeter_frame once per
 // game tick, in this order. Keep both sides in step; bump kLuaFrameVersion on any change.
+// While debug recording is on, the LuaDebugField block follows the LuaField block.
+#include <array>
 #include <optional>
 #include <span>
 #include <string>
@@ -27,6 +29,26 @@ enum class LuaField : int {
 };
 inline constexpr int kLuaFieldCount = static_cast<int>(LuaField::Count);
 
+// Extra values for debug recording (ac8gmeter_frame asks for them by returning 2). Read
+// defensively by Lua: NaN where the game does not provide a value; never validated.
+enum class LuaDebugField : int {
+  RealTimeS,           // UGameplayStatics::GetRealTimeSeconds (does not stop while paused)
+  GlobalTimeDilation,  // UGameplayStatics::GetGlobalTimeDilation
+  CustomTimeDilation,  // the plane's AActor::CustomTimeDilation
+  Pitch, Yaw, Roll,    // K2_GetActorRotation, degrees
+  MoveVelX, MoveVelY, MoveVelZ,  // the movement component's Velocity, cm/s (a second velocity source)
+  GameSpeedKmh,        // the plane's GetSpeedKmph(), if it has one (what the game's HUD shows?)
+  GameSpeedMps,        // the plane's GetSpeedMps()
+  GameAltitudeM,       // the plane's GetAltitudeMeters()
+  ImpactCamera,        // 0 / 1: the plane's ImpactCamera is active (scripted / cinematic camera)
+  InputIgnored,        // 0 / 1: the controller ignores move input (menus, cutscenes)
+  ViewTargetIsPlane,   // 0 / 1: the camera's view target is the plane
+  WorldToMeters,       // AWorldSettings::WorldToMeters: world units per metre (UE default 100 = cm)
+  Count
+};
+inline constexpr int kLuaDebugFieldCount = static_cast<int>(LuaDebugField::Count);
+const char* luaDebugFieldName(LuaDebugField field);  // CSV column name, e.g. "game_speed_kmh"
+
 struct LuaFrame {
   double worldTimeS = 0.0;
   double deltaS = 0.0;
@@ -36,10 +58,12 @@ struct LuaFrame {
   Vec3 locationCm;
   Vec3 velocityCmS;
   Basis attitude;  // body axes in world space
+  std::optional<std::array<double, kLuaDebugFieldCount>> debug;  // when the debug block was sent
 };
 
-// Validates the version, the count and every value (finite, flags 0/1, unit axes when a
-// plane is present). nullopt with *error describing the first problem.
+// Validates the version, the count (with or without the debug block) and every base value
+// (finite, flags 0/1, unit axes when a plane is present). nullopt with *error describing the
+// first problem.
 std::optional<LuaFrame> parseLuaFrame(std::span<const double> values, std::string* error = nullptr);
 
 }  // namespace ft::mod

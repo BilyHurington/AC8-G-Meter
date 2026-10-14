@@ -106,6 +106,10 @@ void TelemetryUi::addLayer(std::unique_ptr<IOverlayLayer> layer) {
   if (layer) impl_->layers.push_back(std::move(layer));
 }
 
+void TelemetryUi::setDiagnostics(bool available, std::string status) {
+  impl_->menu.setDiagnostics(available, std::move(status));
+}
+
 void TelemetryUi::frame(const MetricsSnapshot& snapshot, float screenW, float screenH, double now) {
   Impl& d = *impl_;
   Settings& settings = store_.settings();

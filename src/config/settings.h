@@ -102,6 +102,13 @@ struct HistorySettings {
   bool operator==(const HistorySettings&) const = default;
 };
 
+struct DiagnosticsSettings {
+  // Hosts that support it (the game mod) write every frame's raw input and computed values to
+  // a CSV file while this is on (TelemetryUi::setDiagnosticsAvailable).
+  bool debugRecording = false;
+  bool operator==(const DiagnosticsSettings&) const = default;
+};
+
 struct Settings {
   // 2: adaptive filtering (version 1 files are migrated on load, see settings_store.cpp).
   static constexpr int kVersion = 2;
@@ -111,6 +118,7 @@ struct Settings {
   HotkeySettings hotkeys;
   SummarySettings summary;
   HistorySettings history;
+  DiagnosticsSettings diagnostics;
 
   // Forces every field into its valid range (ranges documented in settings.cpp).
   void clamp();

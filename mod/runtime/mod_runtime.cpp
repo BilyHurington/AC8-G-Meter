@@ -45,10 +45,16 @@ ModRuntime::ModRuntime(std::filesystem::path modDir, ModOptions options)
   // The UI (render thread) only publishes the new config; onLuaFrame (game thread) applies it.
   ui_.onSettingsChanged = [this](const Settings& s) { pendingConfig_.publish(s.toPipelineConfig(baseConfig_)); };
   latest_.publish(pipeline_.snapshot());
+  // Debug recording is per session (a forgotten switch must not record every future game):
+  // off unless config.lua asks for it from the start.
+  store_.settings().diagnostics.debugRecording = options_.debugRecording;
+  debugWanted_ = options_.debugRecording;
+  debugStatus_.publish("Off");
 }
 
 ModRuntime::~ModRuntime() {
   stopRecording();
+  debug_.close();
   store_.flush();
   archive_.flush();
 }
@@ -68,7 +74,33 @@ void ModRuntime::onLuaFrame(const LuaFrame& frame) {
     logLine("mission ended");
     stopRecording();
   }
-  if (!samples_.empty()) latest_.publish(pipeline_.snapshot());
+  updateDebugRecording();
+  if (!samples_.empty() || debug_.isOpen()) {
+    const MetricsSnapshot snapshot = pipeline_.snapshot();
+    if (debug_.isOpen()) debug_.write(frame, samples_, snapshot);
+    if (!samples_.empty()) latest_.publish(snapshot);
+  }
+}
+
+void ModRuntime::updateDebugRecording() {
+  const bool wanted = debugWanted_.load(std::memory_order_relaxed);
+  if (!wanted) debugOpenFailed_ = false;  // switching it off and on again retries
+  if (wanted == debug_.isOpen() || (wanted && debugOpenFailed_)) return;
+  if (wanted) {
+    std::string error;
+    if (debug_.open(modDir_ / "debug", &error)) {
+      logf("debug recording to {}", pathToUtf8(debug_.path()));
+      debugStatus_.publish("Recording to " + pathToUtf8(debug_.path()));
+    } else {
+      logf("debug recording: {}", error);
+      debugStatus_.publish("Cannot record: " + error);
+      debugOpenFailed_ = true;
+    }
+  } else {
+    logf("debug recording stopped ({} rows)", debug_.rows());
+    debugStatus_.publish("Off. Last file: " + pathToUtf8(debug_.path()));
+    debug_.close();
+  }
 }
 
 void ModRuntime::push(const RawFlightSample& s) {
@@ -113,6 +145,10 @@ void ModRuntime::onImGuiInit() {
   if (!ui_.loadFonts(pathToUtf8(font))) logf("HUD font not found at {}, using ImGui's default font", pathToUtf8(font));
 }
 
-void ModRuntime::onFrame(float width, float height, double now) { ui_.frame(latest_.read(), width, height, now); }
+void ModRuntime::onFrame(float width, float height, double now) {
+  debugWanted_.store(store_.settings().diagnostics.debugRecording, std::memory_order_relaxed);
+  ui_.setDiagnostics(true, debugStatus_.read());
+  ui_.frame(latest_.read(), width, height, now);
+}
 
 }  // namespace ft::mod

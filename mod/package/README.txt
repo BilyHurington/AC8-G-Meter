@@ -35,6 +35,10 @@ anti-cheat null client (see 2.). Never use mods online.
      settings.json, missions\ (mission history), recordings\ (flight CSV, see
      Scripts\config.lua), ac8gmeter.log
    Borderless or windowed display mode recommended.
+   Debug recording (Ctrl+F8 > Diagnostics): writes every frame's raw aircraft data from the game
+   and the values computed from it to debug\ac8_debug_*.csv (about 130 MB per hour at 60 fps); for checking
+   the G calculation. The switch is off again at the next start; DebugRecording = true in
+   Scripts\config.lua records from the start of the game.
 
 4. Known limitations (first version)
    A mission counts from taking control of the aircraft until it has been gone for 3 s

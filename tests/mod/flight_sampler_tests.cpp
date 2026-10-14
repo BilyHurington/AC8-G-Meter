@@ -81,6 +81,20 @@ TEST_CASE("lua frame: validation") {
   CHECK_FALSE(menu->hasPlane);
 }
 
+TEST_CASE("lua frame: optional debug block") {
+  std::vector<double> v = FrameBuilder().v;
+  for (int i = 0; i < kLuaDebugFieldCount; ++i) v.push_back(i == 0 ? 12.5 : std::numeric_limits<double>::quiet_NaN());
+  std::string error;
+  const auto f = parseLuaFrame(v, &error);
+  REQUIRE_MESSAGE(f, error);
+  REQUIRE(f->debug);
+  CHECK((*f->debug)[static_cast<std::size_t>(LuaDebugField::RealTimeS)] == 12.5);
+  CHECK(std::isnan((*f->debug)[static_cast<std::size_t>(LuaDebugField::GameSpeedKmh)]));  // NaN = not provided
+  CHECK_FALSE(parseLuaFrame(FrameBuilder().v, &error)->debug);
+  v.pop_back();
+  CHECK_FALSE(parseLuaFrame(v, &error));  // neither size
+  CHECK(std::string(luaDebugFieldName(LuaDebugField::GameSpeedKmh)) == "game_speed_kmh");
+}
 TEST_CASE("flight sampler: warm-up, units and phases") {
   FlightSampler s;
   // 0.5 s warm-up on a new plane: the first 30 frames (0.5 s of 1/60 s steps) push nothing.

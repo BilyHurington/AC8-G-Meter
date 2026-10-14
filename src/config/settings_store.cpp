@@ -129,6 +129,7 @@ std::string settingsToJson(const Settings& s) {
       {"summary", {{"auto_show", s.summary.autoShow}}},
       {"history",
        {{"save_missions", s.history.saveMissions}, {"max_saved_missions", s.history.maxSavedMissions}}},
+      {"diagnostics", {{"debug_recording", s.diagnostics.debugRecording}}},
   };
   // error_handler_t::replace: never throws on invalid UTF-8 (this runs from the UI frame).
   return root.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
@@ -188,6 +189,7 @@ bool settingsFromJson(const std::string& text, Settings& out, std::string* error
     readBool(*hi, "save_missions", out.history.saveMissions);
     readInt(*hi, "max_saved_missions", out.history.maxSavedMissions);
   }
+  if (const json* dg = section(root, "diagnostics")) readBool(*dg, "debug_recording", out.diagnostics.debugRecording);
 
   out.clamp();
   return true;
